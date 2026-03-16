@@ -3,7 +3,7 @@ import { parseFile } from '../parser/chunker.js';
 import { openDatabase, getMetaValue, setMetaValue } from '../store/db.js';
 import { upsertFunctions, deleteFunctionsForFile, getFunctionsWithoutEmbeddings, updateEmbedding } from '../store/index-store.js';
 import { computeChangedFiles, upsertTrackedFile, removeTrackedFile } from '../store/file-tracker.js';
-import { createClient, checkHealth, detectModel } from '../embedder/ollama-client.js';
+import { createClient, preflight } from '../embedder/ollama-client.js';
 import { embedChunks } from '../embedder/embed.js';
 import { contentHash } from '../util/hash.js';
 import { findProjectRoot, resolveDbPath, findTypeScriptFiles } from '../util/config.js';
@@ -42,12 +42,15 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
 
   // Check Ollama
   const client = createClient();
-  if (!(await checkHealth(client))) {
-    throw new Error('Cannot connect to Ollama. Is it running? Try: ollama serve');
+  const check = await preflight(client);
+  if (!check.ok) {
+    throw new Error(check.message);
   }
+  log(check.message);
 
+  // Re-detect model (preflight confirmed it exists)
+  const { detectModel } = await import('../embedder/ollama-client.js');
   const model = await detectModel(client);
-  log(`Using model: ${model.name} (${model.tier}, ${model.dimensions}d)`);
 
   // Open database
   const db = openDatabase(dbPath);

@@ -1,7 +1,7 @@
 import { parseSource } from '../parser/chunker.js';
 import { openDatabase, getMetaValue } from '../store/db.js';
 import { queryKNN, getAllFunctions } from '../store/index-store.js';
-import { createClient, checkHealth, detectModel } from '../embedder/ollama-client.js';
+import { createClient, preflight, detectModel } from '../embedder/ollama-client.js';
 import { embedQuery } from '../embedder/embed.js';
 import { loadIgnoreFile, applyExclusions } from '../ignore/ignore-file.js';
 import { detectStaleExclusions } from '../ignore/stale-detector.js';
@@ -46,9 +46,10 @@ export async function runQuery(options: QueryOptions): Promise<QueryResult> {
 
   // Check Ollama
   const client = createClient();
-  if (!(await checkHealth(client))) {
+  const check = await preflight(client);
+  if (!check.ok) {
     db.close();
-    throw new Error('Cannot connect to Ollama. Is it running? Try: ollama serve');
+    throw new Error(check.message);
   }
 
   const model = await detectModel(client);

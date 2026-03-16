@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { runIndex } from '../core/index-pipeline.js';
 import { findProjectRoot, resolveDbPath, findTypeScriptFiles } from '../util/config.js';
-import { info, verbose, error, setLogLevel } from '../util/logger.js';
+import { info, verbose, success, error, setLogLevel } from '../util/logger.js';
 
 interface CliIndexOptions {
   db?: string;
@@ -40,7 +40,7 @@ export function registerIndexCommand(program: Command): void {
           onProgress: options.verbose ? verbose : info,
         });
 
-        info(
+        success(
           `Indexed ${result.functionsIndexed} functions from ${result.filesScanned} files ` +
           `(${result.added} added, ${result.modified} modified, ${result.deleted} deleted) ` +
           `using ${result.model} (${result.tier})`,
