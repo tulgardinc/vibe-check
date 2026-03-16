@@ -1,7 +1,9 @@
+import fs from 'node:fs';
 import { openDatabase, getMetaValue } from '../store/db.js';
 import { getAllFunctions, queryKNN } from '../store/index-store.js';
 import { loadIgnoreFile, isExcluded } from '../ignore/ignore-file.js';
 import { findProjectRoot, resolveDbPath } from '../util/config.js';
+import { jaccardSimilarity, tokenizeCode } from '../ranking/jaccard.js';
 import type { ScanMatch, ScanResult } from '../output/scan-types.js';
 
 export interface ScanOptions {
@@ -28,6 +30,12 @@ export function runScan(options: ScanOptions): ScanResult {
   const dbPath = options.dbPath ?? resolveDbPath(projectRoot);
   const log = options.onProgress ?? (() => {});
 
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(
+      `No index found at ${dbPath}. Run "codeuse index" in a TypeScript project first.`,
+    );
+  }
+
   const db = openDatabase(dbPath);
   try {
     const functions = getAllFunctions(db);
@@ -38,11 +46,17 @@ export function runScan(options: ScanOptions): ScanResult {
     if (embedded.length === 0) {
       return {
         matches: [],
-        meta: { model, functionsScanned: 0, pairsFound: 0, elapsedMs: Date.now() - start },
+        meta: { model, chunksScanned: 0, pairsFound: 0, elapsedMs: Date.now() - start },
       };
     }
 
-    log(`Scanning ${embedded.length} embedded functions...`);
+    log(`Scanning ${embedded.length} embedded chunks...`);
+
+    // Pre-tokenize all sources for Jaccard computation
+    const tokenCache = new Map<string, Set<string>>();
+    for (const fn of embedded) {
+      tokenCache.set(fn.id, tokenizeCode(fn.sourceText));
+    }
 
     // For each function, find its nearest neighbors in the index.
     // We collect all (a, b, distance) pairs and deduplicate so each
@@ -75,21 +89,29 @@ export function runScan(options: ScanOptions): ScanResult {
         // Skip excluded pairs
         if (isExcluded(ignoreFile, fn.signatureHash, neighbor.signatureHash)) continue;
 
+        // Jaccard re-score
+        const tokensA = tokenCache.get(fn.id)!;
+        const tokensB = tokenCache.get(neighbor.id)!;
+        const jaccard = jaccardSimilarity(tokensA, tokensB);
+        const alpha = 0.7;
+        const combinedScore = alpha * neighbor.distance + (1 - alpha) * (1 - jaccard);
+
         // Order alphabetically by id for stable output
         const [a, b] = fn.id < neighbor.id
           ? [fn, neighbor]
           : [neighbor, fn];
 
         allMatches.push({
-          a: { name: a.functionName, path: a.filePath, line: a.startLine, signatureHash: a.signatureHash },
-          b: { name: b.functionName, path: b.filePath, line: b.startLine, signatureHash: b.signatureHash },
-          distance: neighbor.distance,
-          similarity: similarityTier(neighbor.distance),
+          a: { name: a.functionName, path: a.filePath, line: a.startLine, signatureHash: a.signatureHash, chunkType: a.chunkType, context: a.context },
+          b: { name: b.functionName, path: b.filePath, line: b.startLine, signatureHash: b.signatureHash, chunkType: b.chunkType, context: b.context },
+          distance: combinedScore,
+          similarity: similarityTier(combinedScore),
+          jaccardSimilarity: jaccard,
         });
       }
 
       if ((i + 1) % 20 === 0) {
-        log(`  ${i + 1}/${embedded.length} functions scanned`);
+        log(`  ${i + 1}/${embedded.length} chunks scanned`);
       }
     }
 
@@ -101,7 +123,7 @@ export function runScan(options: ScanOptions): ScanResult {
       matches,
       meta: {
         model,
-        functionsScanned: embedded.length,
+        chunksScanned: embedded.length,
         pairsFound: matches.length,
         elapsedMs: Date.now() - start,
       },

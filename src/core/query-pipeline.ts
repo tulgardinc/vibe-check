@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { parseSource } from '../parser/chunker.js';
 import { openDatabase, getMetaValue } from '../store/db.js';
@@ -6,6 +7,7 @@ import { createClient, preflight } from '../embedder/ollama-client.js';
 import { loadIgnoreFile, applyExclusions } from '../ignore/ignore-file.js';
 import { detectStaleExclusions } from '../ignore/stale-detector.js';
 import { findProjectRoot, resolveDbPath } from '../util/config.js';
+import { rerankCandidates } from '../ranking/jaccard.js';
 import type { Candidate, QueryFunction, QueryResult } from '../output/types.js';
 
 export interface QueryOptions {
@@ -42,7 +44,12 @@ export async function runQuery(options: QueryOptions): Promise<QueryResult> {
     };
   }
 
-  // Open database
+  // Open database — don't create an empty one if it doesn't exist
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(
+      `No index found at ${dbPath}. Run "codeuse index" in a TypeScript project first.`,
+    );
+  }
   const db = openDatabase(dbPath);
   try {
     const indexedCount = countFunctions(db);
@@ -84,10 +91,10 @@ export async function runQuery(options: QueryOptions): Promise<QueryResult> {
       const chunk = parsed.chunks[i];
       const queryEmbedding = queryEmbeddings[i];
 
-      // Over-fetch to account for exclusion filtering
-      const knnResults = queryKNN(db, queryEmbedding, topK * 2, threshold);
+      // Over-fetch to give Jaccard re-ranking room to reorder
+      const knnResults = queryKNN(db, queryEmbedding, topK * 3, threshold);
 
-      let candidates: Candidate[] = knnResults
+      const rawCandidates = knnResults
         // Filter self-matches (when querying an already-indexed file)
         .filter((r) => r.id !== chunk.id)
         .map((r) => ({
@@ -98,7 +105,25 @@ export async function runQuery(options: QueryOptions): Promise<QueryResult> {
           detectionMethod: 'embedding' as const,
           source: r.sourceText,
           signatureHash: r.signatureHash,
+          chunkType: r.chunkType,
+          context: r.context,
         }));
+
+      // Jaccard re-rank
+      const reranked = rerankCandidates(chunk.sourceText, rawCandidates, 0.7);
+
+      let candidates: Candidate[] = reranked.map((r) => ({
+        name: r.name,
+        path: r.path,
+        line: r.line,
+        distance: r.combinedScore,
+        detectionMethod: r.detectionMethod,
+        source: r.source,
+        signatureHash: r.signatureHash,
+        chunkType: r.chunkType,
+        context: r.context,
+        jaccardSimilarity: r.jaccardSimilarity,
+      }));
 
       candidates = applyExclusions(
         ignoreFile,
@@ -113,6 +138,7 @@ export async function runQuery(options: QueryOptions): Promise<QueryResult> {
         file: fileName,
         line: chunk.startLine,
         candidates,
+        chunkType: chunk.chunkType,
       });
     }
 
