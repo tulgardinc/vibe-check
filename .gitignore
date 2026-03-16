@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.codeuse.db
+*.tsbuildinfo
