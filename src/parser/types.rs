@@ -39,6 +39,32 @@ pub struct FunctionChunk {
     pub context: Option<String>,
 }
 
+impl FunctionChunk {
+    pub fn line_count(&self) -> usize {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
+
+    pub fn signature(&self) -> String {
+        if self.chunk_type == ChunkType::Block {
+            return format!("<block> ({} lines)", self.line_count());
+        }
+
+        let params: Vec<String> = self
+            .params
+            .iter()
+            .map(|p| match &p.type_ {
+                Some(t) => format!("{}: {t}", p.name),
+                None => p.name.clone(),
+            })
+            .collect();
+
+        match &self.return_type {
+            Some(rt) => format!("({}) => {rt}", params.join(", ")),
+            None => format!("({})", params.join(", ")),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ParsedFile {
     pub file_path: String,

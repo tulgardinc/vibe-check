@@ -8,7 +8,10 @@ pub fn format_human(result: &QueryResult) -> String {
     let mut out = String::new();
 
     for qf in &result.query_functions {
-        out.push_str(&format!("\n{} ({}:{})\n", qf.name, qf.file, qf.line));
+        out.push_str(&format!(
+            "\n{} ({}:{}, {}L) {}\n",
+            qf.name, qf.file, qf.line, qf.line_count, qf.signature
+        ));
 
         if qf.candidates.is_empty() {
             out.push_str("  No similar functions found.\n");
@@ -25,8 +28,8 @@ pub fn format_human(result: &QueryResult) -> String {
                     None => String::new(),
                 };
                 out.push_str(&format!(
-                    "  {display_name} ({}:{}) — similarity: {similarity} [{}{jaccard_suffix}]\n",
-                    c.path, c.line, c.detection_method
+                    "  {display_name} ({}:{}, {}L) {} — similarity: {similarity} [{}{jaccard_suffix}]\n",
+                    c.path, c.line, c.line_count, c.signature, c.detection_method
                 ));
             }
         }

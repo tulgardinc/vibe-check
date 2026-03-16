@@ -6,6 +6,8 @@ pub struct Candidate {
     pub name: String,
     pub path: String,
     pub line: usize,
+    pub line_count: usize,
+    pub signature: String,
     pub distance: f64,
     pub detection_method: String,
     pub source: String,
@@ -30,6 +32,8 @@ pub struct QueryFunction {
     pub name: String,
     pub file: String,
     pub line: usize,
+    pub line_count: usize,
+    pub signature: String,
     pub candidates: Vec<Candidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunk_type: Option<String>,
@@ -58,6 +62,8 @@ pub struct ScanMatchEntry {
     pub name: String,
     pub path: String,
     pub line: usize,
+    pub line_count: usize,
+    pub signature: String,
     pub signature_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunk_type: Option<String>,

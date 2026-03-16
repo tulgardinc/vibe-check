@@ -53,8 +53,14 @@ pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
                 None => String::new(),
             };
 
-            out.push_str(&format!("  {name_a} ({rel_a}:{})\n", m.a.line));
-            out.push_str(&format!("  {name_b} ({rel_b}:{})\n", m.b.line));
+            out.push_str(&format!(
+                "  {name_a} ({rel_a}:{}, {}L) {}\n",
+                m.a.line, m.a.line_count, m.a.signature
+            ));
+            out.push_str(&format!(
+                "  {name_b} ({rel_b}:{}, {}L) {}\n",
+                m.b.line, m.b.line_count, m.b.signature
+            ));
             out.push_str(&format!(
                 "  {pct}% similar (distance: {:.4}{jaccard_info})\n\n",
                 m.distance

@@ -134,16 +134,22 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
                 }
                 true
             })
-            .map(|(func, distance)| CandidateForRerank {
-                name: func.function_name,
-                path: func.file_path,
-                line: func.start_line as usize,
-                distance,
-                detection_method: "embedding".into(),
-                source: func.source_text,
-                signature_hash: func.signature_hash,
-                chunk_type: Some(func.chunk_type),
-                context: func.context,
+            .map(|(func, distance)| {
+                let line_count = func.line_count();
+                let signature = func.signature();
+                CandidateForRerank {
+                    name: func.function_name,
+                    path: func.file_path,
+                    line: func.start_line as usize,
+                    line_count,
+                    signature,
+                    distance,
+                    detection_method: "embedding".into(),
+                    source: func.source_text,
+                    signature_hash: func.signature_hash,
+                    chunk_type: Some(func.chunk_type),
+                    context: func.context,
+                }
             })
             .collect();
 
@@ -157,6 +163,8 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
                 name: r.name,
                 path: r.path,
                 line: r.line,
+                line_count: r.line_count,
+                signature: r.signature,
                 distance: r.combined_score,
                 detection_method: r.detection_method,
                 source: r.source,
@@ -178,6 +186,8 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
             name: chunk.function_name.clone(),
             file: chunk.file_path.clone(),
             line: chunk.start_line,
+            line_count: chunk.line_count(),
+            signature: chunk.signature(),
             candidates: output_candidates,
             chunk_type: Some(chunk.chunk_type.as_str().to_string()),
         });

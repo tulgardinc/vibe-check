@@ -188,6 +188,8 @@ fn to_scan_entry(f: &crate::store::types::StoredFunction) -> ScanMatchEntry {
         name: f.function_name.clone(),
         path: f.file_path.clone(),
         line: f.start_line as usize,
+        line_count: f.line_count(),
+        signature: f.signature(),
         signature_hash: f.signature_hash.clone(),
         chunk_type: Some(f.chunk_type.clone()),
         context: f.context.clone(),
