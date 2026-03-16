@@ -1,3 +1,5 @@
+use crate::parser::types::ChunkType;
+use crate::store::index_store::SlimFunction;
 use crate::store::types::StoredFunction;
 use serde::Serialize;
 
@@ -14,11 +16,31 @@ pub struct Candidate {
     pub source: String,
     pub signature_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunk_type: Option<String>,
+    pub chunk_type: Option<ChunkType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jaccard_similarity: Option<f64>,
+}
+
+impl Candidate {
+    /// Build a Candidate from a StoredFunction and its KNN distance.
+    pub fn from_stored(func: &StoredFunction, distance: f64) -> Self {
+        Self {
+            name: func.function_name.clone(),
+            path: func.file_path.clone(),
+            line: func.start_line,
+            line_count: func.line_count(),
+            signature: func.signature.clone(),
+            distance,
+            detection_method: "embedding".into(),
+            source: func.source_text.clone(),
+            signature_hash: func.signature_hash.clone(),
+            chunk_type: Some(func.chunk_type),
+            context: func.context.clone(),
+            jaccard_similarity: None,
+        }
+    }
 }
 
 impl crate::ignore::ignore_file::HasSignatureHash for Candidate {
@@ -37,7 +59,7 @@ pub struct QueryFunction {
     pub signature: String,
     pub candidates: Vec<Candidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunk_type: Option<String>,
+    pub chunk_type: Option<ChunkType>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,7 +89,7 @@ pub struct ScanMatchEntry {
     pub signature: String,
     pub signature_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunk_type: Option<String>,
+    pub chunk_type: Option<ChunkType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
 }
@@ -77,11 +99,26 @@ impl From<&StoredFunction> for ScanMatchEntry {
         Self {
             name: f.function_name.clone(),
             path: f.file_path.clone(),
-            line: f.start_line as usize,
+            line: f.start_line,
             line_count: f.line_count(),
             signature: f.signature.clone(),
             signature_hash: f.signature_hash.clone(),
-            chunk_type: Some(f.chunk_type.as_str().to_string()),
+            chunk_type: Some(f.chunk_type),
+            context: f.context.clone(),
+        }
+    }
+}
+
+impl From<&SlimFunction> for ScanMatchEntry {
+    fn from(f: &SlimFunction) -> Self {
+        Self {
+            name: f.function_name.clone(),
+            path: f.file_path.clone(),
+            line: f.start_line,
+            line_count: f.line_count(),
+            signature: f.signature.clone(),
+            signature_hash: f.signature_hash.clone(),
+            chunk_type: Some(f.chunk_type),
             context: f.context.clone(),
         }
     }
@@ -145,9 +182,9 @@ pub fn similarity_tier(distance: f64) -> &'static str {
 pub struct StatusResult {
     pub exists: bool,
     pub db_path: String,
-    pub size_mb: String,
+    pub size_bytes: u64,
     pub model: String,
-    pub dimensions: String,
+    pub dimensions: usize,
     pub indexed_functions: usize,
     pub unembedded: usize,
     pub tracked_files: usize,
@@ -181,12 +218,11 @@ pub fn format_jaccard_suffix(jaccard: Option<f64>) -> String {
 
 pub fn format_display_name(
     name: &str,
-    chunk_type: Option<&str>,
+    chunk_type: Option<ChunkType>,
     context: Option<&str>,
 ) -> String {
     match (chunk_type, context) {
-        (Some("block"), Some(ctx)) => format!("{name} in {ctx}"),
+        (Some(ChunkType::Block), Some(ctx)) => format!("{name} in {ctx}"),
         _ => name.to_string(),
     }
 }
-

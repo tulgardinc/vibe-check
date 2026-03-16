@@ -2,7 +2,10 @@ use crate::output::types::{ScanResult, SIMILARITY_TIERS, format_display_name, fo
 use std::path::Path;
 
 pub fn format_scan_json(result: &ScanResult) -> String {
-    serde_json::to_string_pretty(result).unwrap_or_default()
+    serde_json::to_string_pretty(result).unwrap_or_else(|e| {
+        eprintln!("Warning: failed to serialize scan result: {e}");
+        "{}".into()
+    })
 }
 
 pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
@@ -25,9 +28,9 @@ pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
         }
 
         let padding = 50usize.saturating_sub(tier.len());
-        let dashes = "─".repeat(padding);
+        let dashes = "\u{2500}".repeat(padding);
         out.push_str(&format!(
-            "\n── {} ({}) {dashes}\n",
+            "\n\u{2500}\u{2500} {} ({}) {dashes}\n",
             tier.to_uppercase(),
             group.len()
         ));
@@ -39,12 +42,12 @@ pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
 
             let name_a = format_display_name(
                 &m.a.name,
-                m.a.chunk_type.as_deref(),
+                m.a.chunk_type,
                 m.a.context.as_deref(),
             );
             let name_b = format_display_name(
                 &m.b.name,
-                m.b.chunk_type.as_deref(),
+                m.b.chunk_type,
                 m.b.context.as_deref(),
             );
 

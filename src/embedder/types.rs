@@ -14,13 +14,13 @@ pub struct OllamaConfig {
     pub host: Option<String>,
 }
 
-pub trait Embedder: Send + Sync {
+pub trait Embedder {
     fn model_name(&self) -> &str;
     fn dimensions(&self) -> usize;
     fn tier(&self) -> &str;
     fn embed_batch(
         &self,
-        inputs: &[String],
+        inputs: &[&str],
         on_progress: Option<&dyn Fn(usize, usize)>,
     ) -> Result<Vec<Vec<f32>>, VibecheckError>;
     fn embed_query(&self, input: &str) -> Result<Vec<f32>, VibecheckError>;
@@ -37,7 +37,7 @@ pub fn resolve_embedder(
             Ok((e, msg))
         }
         None => {
-            let client = crate::embedder::ollama_client::OllamaClient::new(config.host.as_deref());
+            let client = crate::embedder::ollama_client::OllamaClient::new(config.host.as_deref())?;
             let (embedder, msg) = client.preflight(config.model.as_deref())?;
             logger::info(&msg);
             Ok((Box::new(embedder), msg))

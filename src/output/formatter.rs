@@ -1,7 +1,10 @@
 use crate::output::types::{QueryResult, StatusResult, format_display_name, format_jaccard_suffix, format_similarity};
 
 pub fn format_json(result: &QueryResult) -> String {
-    serde_json::to_string_pretty(result).unwrap_or_default()
+    serde_json::to_string_pretty(result).unwrap_or_else(|e| {
+        eprintln!("Warning: failed to serialize query result: {e}");
+        "{}".into()
+    })
 }
 
 pub fn format_human(result: &QueryResult) -> String {
@@ -20,7 +23,7 @@ pub fn format_human(result: &QueryResult) -> String {
                 let similarity = format_similarity(c.distance);
                 let display_name = format_display_name(
                     &c.name,
-                    c.chunk_type.as_deref(),
+                    c.chunk_type,
                     c.context.as_deref(),
                 );
                 let jaccard_suffix = format_jaccard_suffix(c.jaccard_similarity);
@@ -52,6 +55,8 @@ pub fn format_status_human(result: &StatusResult) -> String {
         return "No index found. Run `vibec index` to create one.".into();
     }
 
+    let size_mb = result.size_bytes as f64 / 1024.0 / 1024.0;
+
     let unembedded = if result.unembedded > 0 {
         format!(" ({} awaiting embedding)", result.unembedded)
     } else {
@@ -65,8 +70,8 @@ pub fn format_status_human(result: &StatusResult) -> String {
     };
 
     format!(
-        "Database: {} ({} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}",
-        result.db_path, result.size_mb, result.model, result.dimensions,
+        "Database: {} ({:.1} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}",
+        result.db_path, size_mb, result.model, result.dimensions,
         result.indexed_functions, unembedded, result.tracked_files,
         result.last_indexed, result.exclusions, stale
     )

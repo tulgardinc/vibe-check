@@ -24,9 +24,9 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
         return Ok(StatusResult {
             exists: false,
             db_path,
-            size_mb: "0.0".into(),
+            size_bytes: 0,
             model: String::new(),
-            dimensions: String::new(),
+            dimensions: 0,
             indexed_functions: 0,
             unembedded: 0,
             tracked_files: 0,
@@ -42,22 +42,24 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
     let unembedded = count_functions_without_embeddings(&conn)?;
     let tracked = get_tracked_files(&conn)?.len();
 
-    let model = get_meta_value(&conn, "model_name").unwrap_or_default();
-    let dimensions = get_meta_value(&conn, "model_dimensions").unwrap_or_default();
-    let last_indexed = get_meta_value(&conn, "last_indexed_at").unwrap_or_default();
+    let model = get_meta_value(&conn, "model_name")?.unwrap_or_default();
+    let dimensions: usize = get_meta_value(&conn, "model_dimensions")?
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let last_indexed = get_meta_value(&conn, "last_indexed_at")?.unwrap_or_default();
 
-    let size_mb = fs::metadata(&db_path)
-        .map(|m| format!("{:.1}", m.len() as f64 / 1024.0 / 1024.0))
-        .unwrap_or_else(|_| "0.0".into());
+    let size_bytes = fs::metadata(&db_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     let ignore_file = load_ignore_file(&project_root);
     let exclusion_count = ignore_file.exclusions.len();
-    let stale = detect_stale_exclusions(&conn, &ignore_file);
+    let stale = detect_stale_exclusions(&conn, &ignore_file)?;
 
     Ok(StatusResult {
         exists: true,
         db_path,
-        size_mb,
+        size_bytes,
         model,
         dimensions,
         indexed_functions: indexed,

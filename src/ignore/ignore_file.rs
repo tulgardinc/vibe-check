@@ -1,10 +1,41 @@
 use crate::ignore::types::{Exclusion, IgnoreFile};
 use crate::util::logger;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 const FILENAME: &str = ".vibecheck-ignore.json";
 const LEGACY_FILENAME: &str = ".codereuse-ignore.json";
+
+/// Precomputed set of excluded pairs for O(1) lookup.
+/// Pairs are stored as (min_hash, max_hash) for bidirectional matching.
+pub struct ExclusionIndex {
+    pairs: HashSet<(String, String)>,
+}
+
+impl ExclusionIndex {
+    pub fn new(ignore_file: &IgnoreFile) -> Self {
+        let mut pairs = HashSet::new();
+        for e in &ignore_file.exclusions {
+            let (a, b) = normalize_pair(&e.pair.a.signature_hash, &e.pair.b.signature_hash);
+            pairs.insert((a, b));
+        }
+        Self { pairs }
+    }
+
+    pub fn is_excluded(&self, hash_a: &str, hash_b: &str) -> bool {
+        let (a, b) = normalize_pair(hash_a, hash_b);
+        self.pairs.contains(&(a, b))
+    }
+}
+
+fn normalize_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
 
 pub fn load_ignore_file(project_root: &Path) -> IgnoreFile {
     let file_path = project_root.join(FILENAME);
@@ -58,15 +89,8 @@ pub fn save_ignore_file(project_root: &Path, ignore_file: &IgnoreFile) {
 }
 
 pub fn add_exclusion(ignore_file: &IgnoreFile, exclusion: Exclusion) -> IgnoreFile {
-    // Check for duplicate (bidirectional)
-    let already_exists = ignore_file.exclusions.iter().any(|e| {
-        (e.pair.a.signature_hash == exclusion.pair.a.signature_hash
-            && e.pair.b.signature_hash == exclusion.pair.b.signature_hash)
-            || (e.pair.a.signature_hash == exclusion.pair.b.signature_hash
-                && e.pair.b.signature_hash == exclusion.pair.a.signature_hash)
-    });
-
-    if already_exists {
+    let index = ExclusionIndex::new(ignore_file);
+    if index.is_excluded(&exclusion.pair.a.signature_hash, &exclusion.pair.b.signature_hash) {
         return ignore_file.clone();
     }
 
@@ -75,22 +99,14 @@ pub fn add_exclusion(ignore_file: &IgnoreFile, exclusion: Exclusion) -> IgnoreFi
     new_file
 }
 
-pub fn is_excluded(ignore_file: &IgnoreFile, query_hash: &str, candidate_hash: &str) -> bool {
-    ignore_file.exclusions.iter().any(|e| {
-        (e.pair.a.signature_hash == query_hash && e.pair.b.signature_hash == candidate_hash)
-            || (e.pair.a.signature_hash == candidate_hash
-                && e.pair.b.signature_hash == query_hash)
-    })
-}
-
 pub fn apply_exclusions<T: HasSignatureHash>(
-    ignore_file: &IgnoreFile,
+    index: &ExclusionIndex,
     candidates: Vec<T>,
     query_signature_hash: &str,
 ) -> Vec<T> {
     candidates
         .into_iter()
-        .filter(|c| !is_excluded(ignore_file, query_signature_hash, c.signature_hash()))
+        .filter(|c| !index.is_excluded(query_signature_hash, c.signature_hash()))
         .collect()
 }
 
@@ -167,10 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn is_excluded_bidirectional() {
+    fn exclusion_index_bidirectional() {
         let ignore = add_exclusion(&IgnoreFile::default(), make_exclusion("aaa", "bbb"));
-        assert!(is_excluded(&ignore, "aaa", "bbb"));
-        assert!(is_excluded(&ignore, "bbb", "aaa"));
-        assert!(!is_excluded(&ignore, "aaa", "ccc"));
+        let index = ExclusionIndex::new(&ignore);
+        assert!(index.is_excluded("aaa", "bbb"));
+        assert!(index.is_excluded("bbb", "aaa"));
+        assert!(!index.is_excluded("aaa", "ccc"));
     }
 }

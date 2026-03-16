@@ -25,6 +25,14 @@ struct Cli {
     /// Ollama server URL (overrides OLLAMA_HOST env var)
     #[arg(long, global = true)]
     ollama_host: Option<String>,
+
+    /// Database file path
+    #[arg(long, global = true)]
+    db: Option<String>,
+
+    /// Verbose output
+    #[arg(long, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -33,15 +41,9 @@ enum Commands {
     Index {
         /// Directory to index
         path: Option<String>,
-        /// Database file path
-        #[arg(long)]
-        db: Option<String>,
         /// Force full re-index
         #[arg(long)]
         force: bool,
-        /// Verbose output
-        #[arg(long)]
-        verbose: bool,
         /// Show what would be indexed without writing
         #[arg(long)]
         dry_run: bool,
@@ -59,15 +61,9 @@ enum Commands {
         /// Cosine distance threshold
         #[arg(long, default_value = "0.3")]
         threshold: f64,
-        /// Database file path
-        #[arg(long)]
-        db: Option<String>,
         /// Force JSON output
         #[arg(long)]
         json: bool,
-        /// Verbose output
-        #[arg(long)]
-        verbose: bool,
     },
     /// Scan the entire indexed codebase for similar function pairs
     Scan {
@@ -77,57 +73,46 @@ enum Commands {
         /// Cosine distance threshold
         #[arg(long, default_value = "0.25")]
         threshold: f64,
-        /// Database file path
-        #[arg(long)]
-        db: Option<String>,
         /// Force JSON output
         #[arg(long)]
         json: bool,
-        /// Verbose output
-        #[arg(long)]
-        verbose: bool,
     },
     /// Show index health and statistics
-    Status {
-        /// Database file path
-        #[arg(long)]
-        db: Option<String>,
-    },
+    Status,
 }
 
 fn main() {
     let cli = Cli::parse();
 
+    if cli.verbose {
+        logger::set_log_level(LogLevel::Verbose);
+    }
+
     let ollama = vibecheck::embedder::types::OllamaConfig {
         model: cli.model,
         host: cli.ollama_host,
     };
+    let db = cli.db;
 
     let result = match cli.command {
         Commands::Index {
             path,
-            db,
             force,
-            verbose,
             dry_run,
-        } => run_index_cmd(path, db, force, verbose, dry_run, ollama.clone()),
+        } => run_index_cmd(path, db, force, dry_run, ollama),
         Commands::Query {
             file,
             stdin,
             top_k,
             threshold,
-            db,
             json,
-            verbose,
-        } => run_query_cmd(file, stdin, top_k, threshold, db, json, verbose, ollama.clone()),
+        } => run_query_cmd(file, stdin, top_k, threshold, db, json, ollama),
         Commands::Scan {
             top_n,
             threshold,
-            db,
             json,
-            verbose,
-        } => run_scan_cmd(top_n, threshold, db, json, verbose),
-        Commands::Status { db } => run_status_cmd(db),
+        } => run_scan_cmd(top_n, threshold, db, json),
+        Commands::Status => run_status_cmd(db),
     };
 
     if let Err(e) = result {
@@ -140,14 +125,9 @@ fn run_index_cmd(
     path: Option<String>,
     db: Option<String>,
     force: bool,
-    verbose: bool,
     dry_run: bool,
     ollama: vibecheck::embedder::types::OllamaConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if verbose {
-        logger::set_log_level(LogLevel::Verbose);
-    }
-
     if dry_run {
         let start_dir = path.as_deref().map(Path::new).unwrap_or(Path::new("."));
         let project_root = find_project_root(start_dir);
@@ -168,11 +148,12 @@ fn run_index_cmd(
             let bar = ProgressBar::new(total as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
-                    .template("{msg} [{bar:30}] {pos}/{len} ({eta})")
+                    .template("{msg} [{bar:30}] {pos}/{len} ({elapsed} elapsed, {eta} remaining)")
                     .unwrap()
                     .progress_chars("=> "),
             );
             bar.set_message("Embedding");
+            bar.enable_steady_tick(std::time::Duration::from_millis(200));
             *self.bar.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar);
         }
 
@@ -213,7 +194,6 @@ fn run_index_cmd(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_query_cmd(
     file: String,
     stdin: bool,
@@ -221,13 +201,8 @@ fn run_query_cmd(
     threshold: f64,
     db: Option<String>,
     json: bool,
-    verbose: bool,
     ollama: vibecheck::embedder::types::OllamaConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if verbose {
-        logger::set_log_level(LogLevel::Verbose);
-    }
-
     let source = if stdin {
         let mut buf = String::new();
         io::stdin().read_to_string(&mut buf)?;
@@ -262,12 +237,7 @@ fn run_scan_cmd(
     threshold: f64,
     db: Option<String>,
     json: bool,
-    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if verbose {
-        logger::set_log_level(LogLevel::Verbose);
-    }
-
     let result = run_scan(ScanOptions {
         top_n,
         threshold,

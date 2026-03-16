@@ -1,9 +1,9 @@
 use crate::error::VibecheckError;
-use crate::ignore::ignore_file::{is_excluded, load_ignore_file};
+use crate::ignore::ignore_file::{load_ignore_file, ExclusionIndex};
 use crate::output::types::{ScanMatch, ScanMatchEntry, ScanMeta, ScanResult, similarity_tier};
 use crate::ranking::jaccard::{combined_score, jaccard_similarity, DEFAULT_RERANK_ALPHA};
 use crate::store::db::{get_meta_value, open_database};
-use crate::store::index_store::{get_all_functions, query_knn_raw};
+use crate::store::index_store::{get_embedded_functions_slim, query_knn_raw, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
 use crate::util::logger;
@@ -30,24 +30,19 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
 
     let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
     let conn = open_database(&db_path)?;
-    let all_functions = get_all_functions(&conn)?;
+    let embedded = get_embedded_functions_slim(&conn)?;
     let ignore_file = load_ignore_file(&project_root);
+    let exclusion_index = ExclusionIndex::new(&ignore_file);
 
-    if let Some(model) = get_meta_value(&conn, "model_name") {
+    if let Some(model) = get_meta_value(&conn, "model_name")? {
         logger::verbose(&format!("Using index built with model: {model}"));
     }
-
-    // Filter to embedded functions only
-    let embedded: Vec<_> = all_functions
-        .iter()
-        .filter(|f| f.embedding.is_some())
-        .collect();
 
     if embedded.is_empty() {
         return Ok(ScanResult {
             matches: vec![],
             meta: ScanMeta {
-                model: get_meta_value(&conn, "model_name").unwrap_or_default(),
+                model: get_meta_value(&conn, "model_name")?.unwrap_or_default(),
                 chunks_scanned: 0,
                 pairs_found: 0,
                 elapsed_ms: start.elapsed().as_millis(),
@@ -60,13 +55,22 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
         embedded.len()
     ));
 
-    // Find pairs
-    let mut seen_pairs: HashSet<String> = HashSet::new();
+    let vec_exists = vec_table_exists(&conn)?;
+
+    // Find pairs — use tuple keys to avoid String allocation for pair dedup
+    let mut seen_pairs: HashSet<(usize, usize)> = HashSet::new();
     let mut all_matches: Vec<ScanMatch> = Vec::new();
 
-    for func in &embedded {
+    // Build an index from function ID → position for dedup without string alloc
+    let id_to_idx: std::collections::HashMap<&str, usize> = embedded
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id.as_str(), i))
+        .collect();
+
+    for (idx, func) in embedded.iter().enumerate() {
         let embedding_bytes = func.embedding.as_ref().unwrap();
-        let neighbors = query_knn_raw(&conn, embedding_bytes, SCAN_KNN_NEIGHBORS, options.threshold)?;
+        let neighbors = query_knn_raw(&conn, embedding_bytes, SCAN_KNN_NEIGHBORS, options.threshold, vec_exists)?;
 
         for (neighbor, distance) in &neighbors {
             if should_filter_neighbor(
@@ -80,19 +84,19 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
                 continue;
             }
 
-            // Deduplicate unordered pairs
-            let pair_key = if func.id < neighbor.id {
-                format!("{}||{}", func.id, neighbor.id)
+            // Deduplicate unordered pairs using indices
+            let neighbor_idx = id_to_idx.get(neighbor.id.as_str()).copied().unwrap_or(usize::MAX);
+            let pair_key = if idx < neighbor_idx {
+                (idx, neighbor_idx)
             } else {
-                format!("{}||{}", neighbor.id, func.id)
+                (neighbor_idx, idx)
             };
 
-            if seen_pairs.contains(&pair_key) {
+            if !seen_pairs.insert(pair_key) {
                 continue;
             }
-            seen_pairs.insert(pair_key);
 
-            if is_excluded(&ignore_file, &func.signature_hash, &neighbor.signature_hash) {
+            if exclusion_index.is_excluded(&func.signature_hash, &neighbor.signature_hash) {
                 continue;
             }
 
@@ -100,9 +104,9 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
             let combined = combined_score(*distance, jaccard, DEFAULT_RERANK_ALPHA);
 
             let (entry_a, entry_b) = if func.id < neighbor.id {
-                (ScanMatchEntry::from(*func), ScanMatchEntry::from(neighbor))
+                (ScanMatchEntry::from(func), ScanMatchEntry::from(neighbor))
             } else {
-                (ScanMatchEntry::from(neighbor), ScanMatchEntry::from(*func))
+                (ScanMatchEntry::from(neighbor), ScanMatchEntry::from(func))
             };
 
             all_matches.push(ScanMatch {
@@ -127,7 +131,7 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
     Ok(ScanResult {
         matches: all_matches,
         meta: ScanMeta {
-            model: get_meta_value(&conn, "model_name").unwrap_or_default(),
+            model: get_meta_value(&conn, "model_name")?.unwrap_or_default(),
             chunks_scanned: embedded.len(),
             pairs_found,
             elapsed_ms: start.elapsed().as_millis(),

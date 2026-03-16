@@ -30,25 +30,36 @@ pub fn jaccard_similarity(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RankedCandidate {
-    pub candidate: CandidateForRerank,
-    pub jaccard_similarity: f64,
-    pub combined_score: f64,
+/// An item to be re-ranked, wrapping an arbitrary payload with its distance and tokens.
+#[derive(Debug)]
+pub struct RerankItem<T> {
+    pub item: T,
+    pub distance: f64,
+    pub tokens: HashSet<String>,
 }
 
-pub fn rerank_candidates(
+/// Result of re-ranking: the original item plus computed scores.
+#[derive(Debug)]
+pub struct Reranked<T> {
+    pub item: T,
+    pub combined_score: f64,
+    pub jaccard_similarity: f64,
+}
+
+/// Re-rank candidates by blending embedding distance with Jaccard token similarity.
+/// Returns results sorted by combined score (ascending = most similar first).
+pub fn rerank<T>(
     query_tokens: &HashSet<String>,
-    candidates: Vec<CandidateForRerank>,
+    candidates: Vec<RerankItem<T>>,
     alpha: f64,
-) -> Vec<RankedCandidate> {
-    let mut ranked: Vec<RankedCandidate> = candidates
+) -> Vec<Reranked<T>> {
+    let mut ranked: Vec<Reranked<T>> = candidates
         .into_iter()
         .map(|c| {
             let jaccard = jaccard_similarity(query_tokens, &c.tokens);
             let score = combined_score(c.distance, jaccard, alpha);
-            RankedCandidate {
-                candidate: c,
+            Reranked {
+                item: c.item,
                 jaccard_similarity: jaccard,
                 combined_score: score,
             }
@@ -62,22 +73,6 @@ pub fn rerank_candidates(
     });
 
     ranked
-}
-
-#[derive(Debug, Clone)]
-pub struct CandidateForRerank {
-    pub name: String,
-    pub path: String,
-    pub line: usize,
-    pub line_count: usize,
-    pub signature: String,
-    pub distance: f64,
-    pub detection_method: String,
-    pub source: String,
-    pub signature_hash: String,
-    pub chunk_type: Option<String>,
-    pub context: Option<String>,
-    pub tokens: HashSet<String>,
 }
 
 #[cfg(test)]
@@ -119,38 +114,20 @@ mod tests {
             ["hello_world"].iter().map(|s| s.to_string()).collect();
 
         let candidates = vec![
-            CandidateForRerank {
-                name: "far".into(),
-                path: "a.ts".into(),
-                line: 1,
-                line_count: 1,
-                signature: "()".into(),
+            RerankItem {
+                item: "far",
                 distance: 0.5,
-                detection_method: "embedding".into(),
-                source: "function unique_xyz() { return 1; }".into(),
-                signature_hash: "aaaaaaaa".into(),
-                chunk_type: None,
-                context: None,
                 tokens: ["unique_xyz"].iter().map(|s| s.to_string()).collect(),
             },
-            CandidateForRerank {
-                name: "close".into(),
-                path: "b.ts".into(),
-                line: 1,
-                line_count: 1,
-                signature: "()".into(),
+            RerankItem {
+                item: "close",
                 distance: 0.1,
-                detection_method: "embedding".into(),
-                source: "function hello_world() { return 1; }".into(),
-                signature_hash: "bbbbbbbb".into(),
-                chunk_type: None,
-                context: None,
                 tokens: ["hello_world"].iter().map(|s| s.to_string()).collect(),
             },
         ];
 
-        let ranked = rerank_candidates(&query_tokens, candidates, 0.7);
-        assert_eq!(ranked[0].candidate.name, "close");
+        let ranked = rerank(&query_tokens, candidates, 0.7);
+        assert_eq!(ranked[0].item, "close");
         assert!(ranked[0].combined_score < ranked[1].combined_score);
     }
 }

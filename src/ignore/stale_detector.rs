@@ -1,3 +1,4 @@
+use crate::error::VibecheckError;
 use crate::ignore::types::{IgnoreFile, PairSide, StaleWarning};
 use crate::store::index_store::get_all_signature_hashes;
 use rusqlite::Connection;
@@ -5,11 +6,8 @@ use rusqlite::Connection;
 pub fn detect_stale_exclusions(
     conn: &Connection,
     ignore_file: &IgnoreFile,
-) -> Vec<StaleWarning> {
-    let known_hashes = match get_all_signature_hashes(conn) {
-        Ok(h) => h,
-        Err(_) => return vec![],
-    };
+) -> Result<Vec<StaleWarning>, VibecheckError> {
+    let known_hashes = get_all_signature_hashes(conn)?;
 
     let mut warnings = Vec::new();
 
@@ -30,5 +28,5 @@ pub fn detect_stale_exclusions(
         }
     }
 
-    warnings
+    Ok(warnings)
 }

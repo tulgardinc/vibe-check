@@ -7,8 +7,8 @@ pub struct StoredFunction {
     pub file_path: String,
     pub function_name: String,
     pub source_text: String,
-    pub start_line: i64,
-    pub end_line: i64,
+    pub start_line: usize,
+    pub end_line: usize,
     pub params_json: String,
     pub return_type: Option<String>,
     pub is_exported: bool,
@@ -23,7 +23,7 @@ pub struct StoredFunction {
 
 impl StoredFunction {
     pub fn line_count(&self) -> usize {
-        (self.end_line - self.start_line + 1).max(0) as usize
+        self.end_line.saturating_sub(self.start_line) + 1
     }
 }
 

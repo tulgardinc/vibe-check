@@ -5,14 +5,19 @@ use std::sync::Once;
 static VEC_INIT: Once = Once::new();
 
 /// Current schema version. Increment when adding new migrations.
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// Register sqlite-vec as an auto-extension. Called once, applies to all future connections.
 fn ensure_vec_registered() {
     VEC_INIT.call_once(|| {
-        // SAFETY: sqlite3_vec_init is an extern "C" function with the correct SQLite
-        // extension entry-point signature. The transmute converts the fn pointer to the
-        // type expected by sqlite3_auto_extension.
+        // SAFETY: `sqlite3_vec_init` is the entry-point function exported by the sqlite-vec
+        // C extension.  Its signature matches the `sqlite3_auto_extension` callback type
+        // (`fn(*mut sqlite3, *mut *mut c_char, *const sqlite3_api_routines) -> c_int`), but
+        // Rust sees it with a different calling-convention wrapper, so a transmute is needed.
+        //
+        // This is the officially documented way to register sqlite-vec with rusqlite.  If the
+        // sqlite-vec crate changes its init function signature, this will still compile but
+        // produce undefined behaviour — pin the `sqlite-vec` version and audit on upgrades.
         unsafe {
             let f: unsafe extern "C" fn(
                 *mut rusqlite::ffi::sqlite3,
@@ -24,27 +29,35 @@ fn ensure_vec_registered() {
     });
 }
 
+/// Common connection setup: WAL mode, busy timeout, foreign keys.
+fn configure_connection(conn: &Connection) -> Result<(), VibecheckError> {
+    conn.busy_timeout(std::time::Duration::from_secs(30))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+    conn.execute_batch("PRAGMA synchronous = NORMAL;")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    run_migrations(conn)?;
+    Ok(())
+}
+
 pub fn open_database(db_path: &str) -> Result<Connection, VibecheckError> {
     ensure_vec_registered();
-
     let conn = Connection::open(db_path)?;
-    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-    run_migrations(&conn)?;
+    configure_connection(&conn)?;
     Ok(conn)
 }
 
 pub fn open_database_no_vec(db_path: &str) -> Result<Connection, VibecheckError> {
     let conn = Connection::open(db_path)?;
-    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-    run_migrations(&conn)?;
+    configure_connection(&conn)?;
     Ok(conn)
 }
 
 fn get_schema_version(conn: &Connection) -> i32 {
     conn.pragma_query_value(None, "user_version", |row| row.get(0))
-        .unwrap_or(0)
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: failed to read schema version: {e}");
+            0
+        })
 }
 
 fn set_schema_version(conn: &Connection, version: i32) -> Result<(), VibecheckError> {
@@ -55,6 +68,7 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), VibecheckEr
 /// Check whether a table has a given column. Used by schema migrations.
 // Table name is always a compile-time constant — no injection risk.
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    debug_assert!(table.chars().all(|c| c.is_alphanumeric() || c == '_'));
     conn.prepare(&format!("PRAGMA table_info({table})"))
         .and_then(|mut stmt| {
             stmt.query_map([], |row| row.get::<_, String>(1))
@@ -90,11 +104,11 @@ fn run_migrations(conn: &Connection) -> Result<(), VibecheckError> {
                 end_line INTEGER NOT NULL,
                 params_json TEXT NOT NULL,
                 return_type TEXT,
-                is_exported INTEGER NOT NULL,
+                is_exported INTEGER NOT NULL CHECK(is_exported IN (0, 1)),
                 signature_hash TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
                 embedding BLOB,
-                chunk_type TEXT NOT NULL DEFAULT 'function',
+                chunk_type TEXT NOT NULL DEFAULT 'function' CHECK(chunk_type IN ('function', 'block')),
                 context TEXT,
                 signature TEXT NOT NULL DEFAULT '',
                 tokens_json TEXT NOT NULL DEFAULT '[]',
@@ -125,6 +139,13 @@ fn run_migrations(conn: &Connection) -> Result<(), VibecheckError> {
         set_schema_version(conn, 3)?;
     }
 
+    if version < 4 {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_functions_unembedded ON functions(id) WHERE embedding IS NULL;"
+        )?;
+        set_schema_version(conn, 4)?;
+    }
+
     debug_assert_eq!(get_schema_version(conn), SCHEMA_VERSION);
 
     Ok(())
@@ -146,26 +167,37 @@ pub fn ensure_vec_table(conn: &Connection, dimensions: usize) -> Result<(), Vibe
         .exists([])?;
 
     if !table_exists {
-        conn.execute_batch(&format!(
+        let tx = conn.unchecked_transaction()?;
+
+        tx.execute_batch(&format!(
             "CREATE VIRTUAL TABLE vec_functions USING vec0(\
                 embedding float[{dimensions}] distance_metric=cosine\
             )"
         ))?;
 
         // Back-fill from existing embeddings
-        conn.execute_batch(
+        tx.execute_batch(
             "INSERT INTO vec_functions (rowid, embedding)
              SELECT rowid, embedding FROM functions WHERE embedding IS NOT NULL"
         )?;
+
+        tx.commit()?;
     }
     Ok(())
 }
 
-pub fn get_meta_value(conn: &Connection, key: &str) -> Option<String> {
-    conn.prepare_cached("SELECT value FROM index_meta WHERE key = ?")
-        .ok()?
+pub fn get_meta_value(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<String>, VibecheckError> {
+    match conn
+        .prepare_cached("SELECT value FROM index_meta WHERE key = ?")?
         .query_row([key], |row| row.get(0))
-        .ok()
+    {
+        Ok(val) => Ok(Some(val)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn set_meta_value(
@@ -205,11 +237,11 @@ mod tests {
 
         set_meta_value(&conn, "model_name", "nomic-embed-code").unwrap();
         assert_eq!(
-            get_meta_value(&conn, "model_name"),
+            get_meta_value(&conn, "model_name").unwrap(),
             Some("nomic-embed-code".into())
         );
 
-        assert_eq!(get_meta_value(&conn, "nonexistent"), None);
+        assert_eq!(get_meta_value(&conn, "nonexistent").unwrap(), None);
     }
 
     #[test]

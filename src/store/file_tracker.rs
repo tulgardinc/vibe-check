@@ -1,6 +1,6 @@
 use crate::error::VibecheckError;
 use crate::store::types::FileRecord;
-use crate::util::hash::content_hash;
+use crate::util::hash::sha256;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -52,6 +52,8 @@ pub struct FileChanges {
     pub modified: Vec<String>,
     pub deleted: Vec<String>,
     pub unchanged: Vec<String>,
+    /// Source content for files read during change detection, to avoid re-reading in the parse step.
+    pub cached_content: HashMap<String, String>,
 }
 
 pub fn compute_changed_files(
@@ -80,11 +82,12 @@ pub fn compute_changed_files(
                     changes.unchanged.push(fp.clone());
                 } else {
                     let source = fs::read_to_string(fp)?;
-                    let hash = content_hash(&source);
+                    let hash = sha256(&source);
                     if hash == existing.content_hash {
                         changes.unchanged.push(fp.clone());
                     } else {
                         changes.modified.push(fp.clone());
+                        changes.cached_content.insert(fp.clone(), source);
                     }
                 }
             }

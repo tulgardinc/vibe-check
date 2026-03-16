@@ -61,7 +61,7 @@ impl Embedder for OllamaEmbedder {
 
     fn embed_batch(
         &self,
-        inputs: &[String],
+        inputs: &[&str],
         on_progress: Option<&dyn Fn(usize, usize)>,
     ) -> Result<Vec<Vec<f32>>, VibecheckError> {
         let mut results = Vec::with_capacity(inputs.len());

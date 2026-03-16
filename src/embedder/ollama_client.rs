@@ -14,6 +14,13 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_POLL_ATTEMPTS: u32 = 20;
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Model detection priority: (base_name, default_tier).
+/// Checked in order; first match wins.
+const MODEL_PRIORITIES: &[(&str, &str)] = &[
+    ("nomic-embed-code", "7b"),
+    ("nomic-embed-text", "7b"),
+];
+
 pub struct OllamaClient {
     client: Client,
     base_url: String,
@@ -49,7 +56,7 @@ fn format_available_models(names: &[String]) -> String {
 }
 
 impl OllamaClient {
-    pub fn new(host: Option<&str>) -> Self {
+    pub fn new(host: Option<&str>) -> Result<Self, VibecheckError> {
         let base_url = host
             .map(String::from)
             .or_else(|| std::env::var("OLLAMA_HOST").ok())
@@ -58,10 +65,9 @@ impl OllamaClient {
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .expect("failed to build HTTP client");
+            .build()?;
 
-        Self { client, base_url }
+        Ok(Self { client, base_url })
     }
 
     pub fn check_health(&self) -> bool {
@@ -135,43 +141,24 @@ impl OllamaClient {
     fn detect_model(&self) -> Result<ModelInfo, VibecheckError> {
         let names = self.list_models()?;
 
-        struct Candidate {
-            matches: fn(&str) -> bool,
-            resolve: fn(&str) -> String,
-            tier: &'static str,
-        }
-
-        let candidates: Vec<Candidate> = vec![
-            Candidate {
-                matches: |n| n == "nomic-embed-code:latest" || n == "nomic-embed-code",
-                resolve: |_| "nomic-embed-code".into(),
-                tier: "7b",
-            },
-            Candidate {
-                matches: |n| n.starts_with("nomic-embed-code:137m"),
-                resolve: |n| n.to_string(),
-                tier: "137m",
-            },
-            Candidate {
-                matches: |n| n == "nomic-embed-text:latest" || n == "nomic-embed-text",
-                resolve: |_| "nomic-embed-text".into(),
-                tier: "7b",
-            },
-            Candidate {
-                matches: |n| n.starts_with("nomic-embed-text:"),
-                resolve: |n| n.to_string(),
-                tier: "137m",
-            },
-        ];
-
-        for candidate in &candidates {
-            if let Some(found) = names.iter().find(|n| (candidate.matches)(n)) {
-                let model_name = (candidate.resolve)(found);
-                let dimensions = self.detect_dimensions(&model_name)?;
+        for (base_name, default_tier) in MODEL_PRIORITIES {
+            // Exact match or :latest tag
+            if names.iter().any(|n| n == *base_name || n == &format!("{base_name}:latest")) {
+                let dimensions = self.detect_dimensions(base_name)?;
                 return Ok(ModelInfo {
-                    name: model_name,
+                    name: base_name.to_string(),
                     dimensions,
-                    tier: candidate.tier.to_string(),
+                    tier: default_tier.to_string(),
+                });
+            }
+            // Tagged variant (e.g., nomic-embed-code:137m)
+            if let Some(found) = names.iter().find(|n| n.starts_with(&format!("{base_name}:"))) {
+                let dimensions = self.detect_dimensions(found)?;
+                let tier = found.split(':').nth(1).unwrap_or("custom");
+                return Ok(ModelInfo {
+                    name: found.clone(),
+                    dimensions,
+                    tier: tier.to_string(),
                 });
             }
         }
@@ -198,6 +185,11 @@ impl OllamaClient {
         }
     }
 
+    /// Try to start Ollama as a background process.
+    ///
+    /// The spawned child process is intentionally not waited on — `ollama serve` is a
+    /// long-running server that should outlive vibecheck.  The child handle is dropped,
+    /// which detaches the process on Unix.
     pub fn try_start_ollama(&self) -> bool {
         let result = Command::new("ollama")
             .args(["serve"])
@@ -206,8 +198,7 @@ impl OllamaClient {
             .spawn();
 
         match result {
-            Ok(_child) => {
-                // Child is detached by not calling .wait()
+            Ok(_detached_child) => {
                 logger::info("Ollama not running — starting it automatically...");
 
                 for _ in 0..STARTUP_POLL_ATTEMPTS {

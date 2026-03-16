@@ -262,6 +262,11 @@ fn collect_tokens_recursive(
     }
 }
 
+/// Construct a deterministic chunk ID from file path, name, and start line.
+fn make_chunk_id(file_path: &str, name: &str, start_line: usize) -> String {
+    format!("{file_path}:{name}:{start_line}")
+}
+
 fn build_chunk(
     name: &str,
     func_node: Node,
@@ -288,7 +293,7 @@ fn build_chunk(
     let tokens = collect_tokens(span_node, source);
 
     Some(FunctionChunk {
-        id: format!("{file_path}:{name}:{start_line}"),
+        id: make_chunk_id(file_path, name, start_line),
         file_path: file_path.to_string(),
         function_name: name.to_string(),
         source_text,
@@ -407,7 +412,7 @@ fn build_block_chunk(
     let tokens = collect_tokens(block, source);
 
     Some(FunctionChunk {
-        id: format!("{file_path}:{synthetic_name}:{start_line}"),
+        id: make_chunk_id(file_path, &synthetic_name, start_line),
         file_path: file_path.to_string(),
         function_name: synthetic_name,
         source_text,

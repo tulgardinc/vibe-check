@@ -41,20 +41,35 @@ fn main() {
                     message: "Invalid Request: jsonrpc must be \"2.0\"".into(),
                 }),
             };
-            let json = serde_json::to_string(&err_resp).unwrap_or_default();
-            let _ = writeln!(stdout, "{json}");
-            let _ = stdout.flush();
+            if !write_response(&mut stdout, &err_resp) {
+                break;
+            }
             continue;
         }
 
         let response = handle_request(&request, &state);
 
-        if let Some(resp) = response {
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let _ = writeln!(stdout, "{json}");
-            let _ = stdout.flush();
+        if let Some(resp) = response
+            && !write_response(&mut stdout, &resp)
+        {
+            break; // stdout closed — client disconnected
         }
     }
+}
+
+/// Write a JSON-RPC response to stdout. Returns false if writing fails (client disconnected).
+fn write_response(stdout: &mut io::Stdout, resp: &JsonRpcResponse) -> bool {
+    let json = match serde_json::to_string(resp) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("vibecheck: failed to serialize response: {e}");
+            return true; // serialization error, but stdout is still open
+        }
+    };
+    if writeln!(stdout, "{json}").is_err() || stdout.flush().is_err() {
+        return false;
+    }
+    true
 }
 
 fn handle_request(

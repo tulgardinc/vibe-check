@@ -1,17 +1,17 @@
 use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
 use crate::error::VibecheckError;
 use crate::output::types::IndexResult;
-use crate::parser::chunker::parse_file;
+use crate::parser::chunker::{parse_file, parse_source};
 use crate::store::db::{get_meta_value, open_database, set_meta_value};
 use crate::store::file_tracker::{
     compute_changed_files, remove_tracked_file, upsert_tracked_file,
 };
 use crate::store::index_store::{
     delete_functions_for_file, get_functions_without_embeddings, update_embedding,
-    upsert_functions,
+    upsert_functions, vec_table_exists,
 };
 use crate::util::config::{find_project_root, find_typescript_files, resolve_db_path};
-use crate::util::hash::content_hash;
+use crate::util::hash::sha256;
 use crate::util::logger;
 use rayon::prelude::*;
 use std::fs;
@@ -84,10 +84,10 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
 
     // Open database
     let db_path_str = db_path.to_string_lossy().to_string();
-    let conn = open_database(&db_path_str)?;
+    let mut conn = open_database(&db_path_str)?;
 
     // Check model mismatch
-    if let Some(stored_model) = get_meta_value(&conn, "model_name")
+    if let Some(stored_model) = get_meta_value(&conn, "model_name")?
         && stored_model != embedder.model_name()
         && !options.force
     {
@@ -100,7 +100,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     }
 
     // Check signature hash version
-    let sig_hash_version = get_meta_value(&conn, "signature_hash_version");
+    let sig_hash_version = get_meta_value(&conn, "signature_hash_version")?;
     if sig_hash_version.as_deref() != Some("2") && sig_hash_version.is_some() && !options.force {
         logger::warn(
             "Index uses legacy 8-char signature hashes. Run with --force to upgrade to 16-char hashes.",
@@ -116,6 +116,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
             modified: vec![],
             deleted: vec![],
             unchanged: vec![],
+            cached_content: Default::default(),
         }
     } else {
         compute_changed_files(&conn, &file_paths)?
@@ -129,7 +130,8 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         changes.unchanged.len()
     ));
 
-    // Parse all added/modified files in parallel (no DB access)
+    // Parse all added/modified files in parallel (no DB access).
+    // Use cached content from change detection to avoid re-reading modified files.
     let files_to_process: Vec<&String> = changes
         .added
         .iter()
@@ -139,8 +141,12 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     let parse_results: Vec<_> = files_to_process
         .par_iter()
         .map(|fp| {
-            let path = Path::new(fp.as_str());
-            match parse_file(path) {
+            let result = if let Some(cached) = changes.cached_content.get(*fp) {
+                Ok(parse_source(cached, fp))
+            } else {
+                parse_file(Path::new(fp.as_str()))
+            };
+            match result {
                 Ok(parsed) => {
                     for err in &parsed.parse_errors {
                         logger::warn(err);
@@ -158,20 +164,21 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
 
     // Atomic transaction: delete stale data + insert new data.
     // If anything fails, the DB rolls back to its pre-index state.
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction()?;
+    let vec_exists = vec_table_exists(&tx)?;
 
     for fp in &changes.deleted {
-        delete_functions_for_file(&tx, fp)?;
+        delete_functions_for_file(&tx, fp, vec_exists)?;
         remove_tracked_file(&tx, fp)?;
     }
 
     for fp in &changes.modified {
-        delete_functions_for_file(&tx, fp)?;
+        delete_functions_for_file(&tx, fp, vec_exists)?;
     }
 
     let mut total_chunks = 0;
     for (fp, parsed) in &parse_results {
-        let hash = content_hash(&parsed.source);
+        let hash = sha256(&parsed.source);
         let meta = fs::metadata(fp)?;
         let mtime_ms = meta
             .modified()?
@@ -193,6 +200,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     let unembedded = get_functions_without_embeddings(&conn)?;
     if !unembedded.is_empty() {
         let total = unembedded.len();
+        let vec_exists = vec_table_exists(&conn)?;
 
         if let Some(ref progress) = options.progress {
             progress.on_start(total);
@@ -208,12 +216,14 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
                 break;
             }
 
-            let texts: Vec<String> = batch.iter().map(|f| f.source_text.clone()).collect();
+            let texts: Vec<&str> = batch.iter().map(|f| f.source_text.as_str()).collect();
             let embeddings = embedder.embed_batch(&texts, None)?;
 
+            let tx = conn.transaction()?;
             for (func, embedding) in batch.iter().zip(embeddings.iter()) {
-                update_embedding(&conn, &func.id, embedding)?;
+                update_embedding(&tx, &func.id, embedding, vec_exists)?;
             }
+            tx.commit()?;
 
             if let Some(ref progress) = options.progress {
                 progress.on_progress(batch.len());
@@ -229,21 +239,23 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         }
     }
 
-    // Update metadata
-    set_meta_value(&conn, "model_name", embedder.model_name())?;
-    set_meta_value(&conn, "model_dimensions", &embedder.dimensions().to_string())?;
-    set_meta_value(&conn, "signature_hash_version", "2")?;
-
     // Ensure vec0 virtual table exists for indexed KNN queries
     crate::store::db::ensure_vec_table(&conn, embedder.dimensions())?;
+
+    // Update metadata atomically
+    let tx = conn.transaction()?;
+    set_meta_value(&tx, "model_name", embedder.model_name())?;
+    set_meta_value(&tx, "model_dimensions", &embedder.dimensions().to_string())?;
+    set_meta_value(&tx, "signature_hash_version", "2")?;
     set_meta_value(
-        &conn,
+        &tx,
         "last_indexed_at",
         &chrono::Utc::now().to_rfc3339(),
     )?;
-    if get_meta_value(&conn, "created_at").is_none() {
-        set_meta_value(&conn, "created_at", &chrono::Utc::now().to_rfc3339())?;
+    if get_meta_value(&tx, "created_at")?.is_none() {
+        set_meta_value(&tx, "created_at", &chrono::Utc::now().to_rfc3339())?;
     }
+    tx.commit()?;
 
     let result = IndexResult {
         files_scanned: files_to_process.len(),

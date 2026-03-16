@@ -37,6 +37,11 @@ fn get_str(args: &Value, key: &str) -> Result<String, String> {
         .ok_or(format!("Missing required parameter: {key}"))
 }
 
+/// Lock the mutex, recovering from poison if needed.
+fn lock_state(state: &Mutex<IndexingState>) -> std::sync::MutexGuard<'_, IndexingState> {
+    state.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn handle_query(args: &Value) -> Result<String, String> {
     let source = if let Some(file) = args.get("file").and_then(|v| v.as_str()) {
         std::fs::read_to_string(file).map_err(|e| format!("Failed to read file: {e}"))?
@@ -73,7 +78,7 @@ pub fn handle_query(args: &Value) -> Result<String, String> {
 
 pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<String, String> {
     let current = {
-        let s = state.lock().unwrap();
+        let s = lock_state(state);
         s.status.clone()
     };
 
@@ -86,12 +91,12 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
         }
         IndexingStatus::Done(ref msg) => {
             let msg = msg.clone();
-            state.lock().unwrap().status = IndexingStatus::Idle;
+            lock_state(state).status = IndexingStatus::Idle;
             Ok(msg)
         }
         IndexingStatus::Failed(ref msg) => {
             let msg = msg.clone();
-            state.lock().unwrap().status = IndexingStatus::Idle;
+            lock_state(state).status = IndexingStatus::Idle;
             Err(msg)
         }
         IndexingStatus::Idle => {
@@ -106,7 +111,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
             let embedded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
             {
-                let mut s = state.lock().unwrap();
+                let mut s = lock_state(state);
                 s.cancel = Arc::clone(&cancel);
                 s.status = IndexingStatus::Running {
                     embedded: Arc::clone(&embedded),
@@ -121,7 +126,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
 
             impl IndexProgress for McpProgress {
                 fn on_start(&self, total: usize) {
-                    let mut s = self.state.lock().unwrap();
+                    let mut s = lock_state(&self.state);
                     s.status = IndexingStatus::Running {
                         embedded: Arc::clone(&self.embedded),
                         total,
@@ -150,7 +155,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
                     embedder: None,
                 });
 
-                let mut s = state_clone.lock().unwrap();
+                let mut s = lock_state(&state_clone);
                 match result {
                     Ok(r) => {
                         s.status = IndexingStatus::Done(format!(
@@ -180,7 +185,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
 }
 
 pub fn handle_index_stop(state: &Arc<Mutex<IndexingState>>) -> Result<String, String> {
-    let s = state.lock().unwrap();
+    let s = lock_state(state);
     match s.status {
         IndexingStatus::Running { .. } => {
             s.cancel.store(true, Ordering::Relaxed);
@@ -256,7 +261,7 @@ pub fn handle_add_exclusion(args: &Value) -> Result<String, String> {
     save_ignore_file(&project_root, &updated);
 
     Ok(format!(
-        "Exclusion added: {} ↔ {} (\"{}\"). Total exclusions: {}.",
+        "Exclusion added: {} \u{2194} {} (\"{}\"). Total exclusions: {}.",
         query_function,
         candidate_function,
         reason,

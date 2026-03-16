@@ -41,19 +41,13 @@ pub fn resolve_existing_db(
     project_root: &Path,
     override_path: Option<&str>,
 ) -> Result<String, VibecheckError> {
-    let db_path = match override_path {
-        Some(p) => p.to_string(),
-        None => project_root
-            .join(DB_FILENAME)
-            .to_string_lossy()
-            .to_string(),
-    };
-    if !Path::new(&db_path).exists() {
+    let db_path = resolve_db_path(project_root, override_path);
+    if !db_path.exists() {
         return Err(VibecheckError::Config(
             "No index found. Run `vibec index` first.".into(),
         ));
     }
-    Ok(db_path)
+    Ok(db_path.to_string_lossy().to_string())
 }
 
 pub fn find_typescript_files(root_dir: &Path) -> Vec<PathBuf> {

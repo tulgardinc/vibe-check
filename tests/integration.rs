@@ -58,7 +58,7 @@ impl Embedder for MockEmbedder {
 
     fn embed_batch(
         &self,
-        inputs: &[String],
+        inputs: &[&str],
         on_progress: Option<&dyn Fn(usize, usize)>,
     ) -> Result<Vec<Vec<f32>>, VibecheckError> {
         let results: Vec<Vec<f32>> = inputs.iter().map(|s| self.hash_to_embedding(s)).collect();
