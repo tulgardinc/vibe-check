@@ -264,6 +264,8 @@ fn handle_query(args: &Value) -> Result<String, String> {
         threshold,
         db_path: None,
         project_root: None,
+        model: None,
+        ollama_host: None,
     })
     .map_err(|e| e.to_string())?;
 
@@ -278,7 +280,11 @@ fn handle_index(args: &Value) -> Result<String, String> {
         path,
         db_path: None,
         force,
-        on_progress: None,
+        model: None,
+        ollama_host: None,
+        on_embed_start: None,
+        on_embed_progress: None,
+        on_embed_done: None,
     })
     .map_err(|e| e.to_string())?;
 

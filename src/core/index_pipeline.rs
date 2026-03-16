@@ -23,7 +23,14 @@ pub struct IndexOptions {
     pub path: Option<String>,
     pub db_path: Option<String>,
     pub force: bool,
-    pub on_progress: Option<Box<dyn Fn(&str)>>,
+    pub model: Option<String>,
+    pub ollama_host: Option<String>,
+    /// Called before embedding starts with total count
+    pub on_embed_start: Option<Box<dyn Fn(usize)>>,
+    /// Called after each embedding completes
+    pub on_embed_progress: Option<Box<dyn Fn(usize)>>,
+    /// Called when embedding finishes
+    pub on_embed_done: Option<Box<dyn Fn()>>,
 }
 
 pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
@@ -58,8 +65,8 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
     logger::info(&format!("Found {} TypeScript files.", files.len()));
 
     // Preflight Ollama
-    let client = OllamaClient::new(None);
-    let (embedder, msg) = client.preflight()?;
+    let client = OllamaClient::new(options.ollama_host.as_deref());
+    let (embedder, msg) = client.preflight(options.model.as_deref())?;
     logger::info(&msg);
 
     // Open database
@@ -158,25 +165,29 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
         }
     }
 
-    // Embed unembedded functions
+    // Embed unembedded functions one at a time, writing each to DB immediately
     let unembedded = get_functions_without_embeddings(&conn)?;
     if !unembedded.is_empty() {
-        logger::info(&format!("Embedding {} functions...", unembedded.len()));
+        let total = unembedded.len();
 
-        let texts: Vec<String> = unembedded.iter().map(|f| f.source_text.clone()).collect();
-        let progress_cb = |done: usize, total: usize| {
-            if let Some(ref cb) = options.on_progress {
-                cb(&format!("Embedded {done}/{total}"));
-            }
-        };
-
-        let embeddings = embedder.embed_batch(&texts, Some(&progress_cb))?;
-
-        for (func, embedding) in unembedded.iter().zip(embeddings.iter()) {
-            update_embedding(&conn, &func.id, embedding)?;
+        if let Some(ref cb) = options.on_embed_start {
+            cb(total);
         }
 
-        logger::success(&format!("Embedded {} functions.", unembedded.len()));
+        for func in &unembedded {
+            let embedding = embedder.embed_query(&func.source_text)?;
+            update_embedding(&conn, &func.id, &embedding)?;
+
+            if let Some(ref cb) = options.on_embed_progress {
+                cb(1);
+            }
+        }
+
+        if let Some(ref cb) = options.on_embed_done {
+            cb();
+        }
+
+        logger::success(&format!("Embedded {total} functions."));
     }
 
     // Update metadata

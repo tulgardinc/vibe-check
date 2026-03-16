@@ -36,12 +36,17 @@ struct EmbedResponse {
 
 impl OllamaClient {
     pub fn new(host: Option<&str>) -> Self {
+        let base_url = host
+            .map(String::from)
+            .or_else(|| std::env::var("OLLAMA_HOST").ok())
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(600))
                 .build()
                 .unwrap_or_default(),
-            base_url: host.unwrap_or("http://localhost:11434").to_string(),
+            base_url,
         }
     }
 
@@ -62,16 +67,65 @@ impl OllamaClient {
     }
 
     pub fn embed(&self, model: &str, inputs: &[&str]) -> Result<Vec<Vec<f32>>, CodeuseError> {
-        let resp: EmbedResponse = self
+        let response = self
             .client
             .post(format!("{}/api/embed", self.base_url))
             .json(&EmbedRequest { model, input: inputs })
-            .send()?
-            .json()?;
+            .send()?;
+
+        let status = response.status();
+        let body = response.text()?;
+
+        if !status.is_success() {
+            return Err(CodeuseError::Ollama(format!(
+                "Ollama embed returned {status}: {body}"
+            )));
+        }
+
+        let resp: EmbedResponse = serde_json::from_str(&body).map_err(|e| {
+            CodeuseError::Ollama(format!(
+                "Failed to parse Ollama response: {e}\nResponse body (first 500 chars): {}",
+                &body[..body.len().min(500)]
+            ))
+        })?;
+
         Ok(resp.embeddings)
     }
 
-    pub fn detect_model(&self) -> Result<ModelInfo, CodeuseError> {
+    /// Resolve which model to use. Checks (in order): explicit argument, VIBECHECK_MODEL env var, auto-detect.
+    pub fn resolve_model(&self, explicit: Option<&str>) -> Result<ModelInfo, CodeuseError> {
+        let model_name = explicit
+            .map(String::from)
+            .or_else(|| std::env::var("VIBECHECK_MODEL").ok());
+
+        match model_name {
+            Some(name) => {
+                // Verify the model exists in Ollama
+                let names = self.list_models()?;
+                let found = names.iter().any(|n| n == &name || n.starts_with(&format!("{name}:")));
+                if !found {
+                    let available = if names.is_empty() {
+                        "\n  No models are currently installed in Ollama.".to_string()
+                    } else {
+                        format!("\n  Models currently in Ollama: {}", names.join(", "))
+                    };
+                    return Err(CodeuseError::Ollama(format!(
+                        "Model '{name}' not found in Ollama.{available}\n\n\
+                         Pull it with: ollama pull {name}"
+                    )));
+                }
+                let dimensions = self.detect_dimensions(&name)?;
+                Ok(ModelInfo {
+                    name,
+                    dimensions,
+                    tier: "custom".to_string(),
+                })
+            }
+            None => self.detect_model(),
+        }
+    }
+
+    fn detect_model(&self) -> Result<ModelInfo, CodeuseError> {
         let names = self.list_models()?;
 
         struct Candidate {
@@ -126,7 +180,7 @@ impl OllamaClient {
              vibecheck needs a Nomic embedding model. Choose one:\n\n\
              \x20   ollama pull nomic-embed-text      (recommended, 274 MB, works on CPU and GPU)\n\
              \x20   ollama pull nomic-embed-code      (code-specific, if available)\n\n\
-             The model runs locally with no API keys or cloud dependencies.\n\
+             Or specify any Ollama embedding model with --model or VIBECHECK_MODEL env var.\n\
              After pulling, re-run this command."
         )))
     }
@@ -167,7 +221,7 @@ impl OllamaClient {
         }
     }
 
-    pub fn preflight(&self) -> Result<(OllamaEmbedder<'_>, String), CodeuseError> {
+    pub fn preflight(&self, model_override: Option<&str>) -> Result<(OllamaEmbedder<'_>, String), CodeuseError> {
         let mut healthy = self.check_health();
 
         if !healthy {
@@ -188,7 +242,7 @@ impl OllamaClient {
             ));
         }
 
-        let model = self.detect_model()?;
+        let model = self.resolve_model(model_override)?;
         let message = format!(
             "Ollama is running. Using {} ({}, {}d).",
             model.name, model.tier, model.dimensions

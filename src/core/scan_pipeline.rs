@@ -86,6 +86,11 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, CodeuseError> {
                 continue;
             }
 
+            // Skip parent-child and sibling block matches within the same file
+            if func.file_path == neighbor.file_path && is_related_chunk(func, neighbor) {
+                continue;
+            }
+
             // Deduplicate unordered pairs
             let pair_key = if func.id < neighbor.id {
                 format!("{}||{}", func.id, neighbor.id)
@@ -150,6 +155,32 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, CodeuseError> {
             elapsed_ms: start.elapsed().as_millis(),
         },
     })
+}
+
+/// Returns true if two chunks in the same file are related (parent-child or siblings
+/// within the same function), which makes them noise rather than real duplicates.
+fn is_related_chunk(
+    a: &crate::store::types::StoredFunction,
+    b: &crate::store::types::StoredFunction,
+) -> bool {
+    // Block is a child of the function
+    if a.chunk_type == "block" && b.chunk_type == "function" {
+        if a.context.as_deref() == Some(&b.function_name) {
+            return true;
+        }
+    }
+    if b.chunk_type == "block" && a.chunk_type == "function" {
+        if b.context.as_deref() == Some(&a.function_name) {
+            return true;
+        }
+    }
+    // Two blocks that share the same parent function
+    if a.chunk_type == "block" && b.chunk_type == "block" {
+        if a.context.is_some() && a.context == b.context {
+            return true;
+        }
+    }
+    false
 }
 
 fn to_scan_entry(f: &crate::store::types::StoredFunction) -> ScanMatchEntry {

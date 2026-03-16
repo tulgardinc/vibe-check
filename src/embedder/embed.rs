@@ -2,7 +2,21 @@ use crate::embedder::ollama_client::OllamaClient;
 use crate::embedder::types::{Embedder, ModelInfo};
 use crate::error::CodeuseError;
 
-const BATCH_SIZE: usize = 32;
+/// Per-input character limit. nomic-embed-code has 8192 token context;
+/// code tokenizes at roughly 2-3 chars/token, so 16K chars is conservative.
+const MAX_INPUT_CHARS: usize = 16_000;
+
+fn truncate_input(input: &str) -> &str {
+    if input.len() <= MAX_INPUT_CHARS {
+        input
+    } else {
+        let mut end = MAX_INPUT_CHARS;
+        while end > 0 && !input.is_char_boundary(end) {
+            end -= 1;
+        }
+        &input[..end]
+    }
+}
 
 pub struct OllamaEmbedder<'a> {
     client: &'a OllamaClient,
@@ -42,15 +56,13 @@ impl Embedder for OllamaEmbedder<'_> {
     ) -> Result<Vec<Vec<f32>>, CodeuseError> {
         let mut results = Vec::with_capacity(inputs.len());
 
-        for i in (0..inputs.len()).step_by(BATCH_SIZE) {
-            let end = (i + BATCH_SIZE).min(inputs.len());
-            let batch_refs: Vec<&str> = inputs[i..end].iter().map(|s| s.as_str()).collect();
-
-            let embeddings = self.client.embed(&self.model_name, &batch_refs)?;
+        for (i, input) in inputs.iter().enumerate() {
+            let truncated = truncate_input(input);
+            let embeddings = self.client.embed(&self.model_name, &[truncated])?;
             results.extend(embeddings);
 
             if let Some(cb) = on_progress {
-                cb(end, inputs.len());
+                cb(i + 1, inputs.len());
             }
         }
 
@@ -58,7 +70,7 @@ impl Embedder for OllamaEmbedder<'_> {
     }
 
     fn embed_query(&self, input: &str) -> Result<Vec<f32>, CodeuseError> {
-        let prefixed = format!("search_query: {input}");
+        let prefixed = format!("search_query: {}", truncate_input(input));
         let embeddings = self.client.embed(&self.model_name, &[&prefixed])?;
         embeddings
             .into_iter()

@@ -19,6 +19,8 @@ pub struct QueryOptions {
     pub threshold: f64,
     pub db_path: Option<String>,
     pub project_root: Option<String>,
+    pub model: Option<String>,
+    pub ollama_host: Option<String>,
 }
 
 pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
@@ -61,8 +63,8 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
     let conn = open_database(&db_path)?;
 
     // Preflight Ollama
-    let client = OllamaClient::new(None);
-    let (embedder, _) = client.preflight()?;
+    let client = OllamaClient::new(options.ollama_host.as_deref());
+    let (embedder, _) = client.preflight(options.model.as_deref())?;
 
     let mut warnings = Vec::new();
 
@@ -97,10 +99,41 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, CodeuseError> {
         let over_fetch = options.top_k * 3;
         let knn_results = query_knn(&conn, embedding, over_fetch, options.threshold)?;
 
-        // Filter self-matches and map to candidates for reranking
+        // Filter self-matches and related chunks (parent-child, sibling blocks)
         let candidates: Vec<CandidateForRerank> = knn_results
             .into_iter()
-            .filter(|(func, _)| func.id != chunk.id)
+            .filter(|(func, _)| {
+                if func.id == chunk.id {
+                    return false;
+                }
+                // Skip parent-child and sibling matches within the same file
+                if func.file_path == chunk.file_path {
+                    let chunk_type_str = chunk.chunk_type.as_str();
+                    // Query block matched its parent function
+                    if chunk_type_str == "block"
+                        && func.chunk_type == "function"
+                        && chunk.context.as_deref() == Some(&func.function_name)
+                    {
+                        return false;
+                    }
+                    // Query function matched one of its own blocks
+                    if chunk_type_str == "function"
+                        && func.chunk_type == "block"
+                        && func.context.as_deref() == Some(&chunk.function_name)
+                    {
+                        return false;
+                    }
+                    // Two blocks sharing the same parent
+                    if chunk_type_str == "block"
+                        && func.chunk_type == "block"
+                        && chunk.context.is_some()
+                        && chunk.context == func.context
+                    {
+                        return false;
+                    }
+                }
+                true
+            })
             .map(|(func, distance)| CandidateForRerank {
                 name: func.function_name,
                 path: func.file_path,

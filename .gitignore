@@ -1,6 +1,3 @@
-node_modules/
-dist/
 .codeuse.db
-*.tsbuildinfo
-experiment/
-codeuse-rs/target/
+.vibecheck.db
+target/

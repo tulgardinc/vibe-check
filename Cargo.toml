@@ -28,6 +28,7 @@ regex = "1"
 chrono = "0.4"
 thiserror = "2"
 hex = "0.4"
+indicatif = "0.17"
 
 [dev-dependencies]
 tempfile = "3"

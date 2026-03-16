@@ -7,6 +7,7 @@ use vibecheck::output::formatter::{format_human, format_json};
 use vibecheck::output::scan_formatter::{format_scan_human, format_scan_json};
 use vibecheck::util::config::find_project_root;
 use vibecheck::util::logger::{self, LogLevel};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 use std::process;
@@ -16,6 +17,14 @@ use std::process;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Ollama embedding model name (overrides VIBECHECK_MODEL env var)
+    #[arg(long, global = true)]
+    model: Option<String>,
+
+    /// Ollama server URL (overrides OLLAMA_HOST env var)
+    #[arg(long, global = true)]
+    ollama_host: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -89,6 +98,9 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
+    let model = cli.model;
+    let ollama_host = cli.ollama_host;
+
     let result = match cli.command {
         Commands::Index {
             path,
@@ -96,7 +108,7 @@ fn main() {
             force,
             verbose,
             dry_run,
-        } => run_index_cmd(path, db, force, verbose, dry_run),
+        } => run_index_cmd(path, db, force, verbose, dry_run, model, ollama_host),
         Commands::Query {
             file,
             stdin,
@@ -105,7 +117,7 @@ fn main() {
             db,
             json,
             verbose,
-        } => run_query_cmd(file, stdin, top_k, threshold, db, json, verbose),
+        } => run_query_cmd(file, stdin, top_k, threshold, db, json, verbose, model, ollama_host),
         Commands::Scan {
             top_n,
             threshold,
@@ -128,6 +140,8 @@ fn run_index_cmd(
     force: bool,
     verbose: bool,
     dry_run: bool,
+    model: Option<String>,
+    ollama_host: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         logger::set_log_level(LogLevel::Verbose);
@@ -144,12 +158,40 @@ fn run_index_cmd(
         return Ok(());
     }
 
+    use std::sync::Arc;
+
+    let pb: Arc<std::sync::Mutex<Option<ProgressBar>>> = Arc::new(std::sync::Mutex::new(None));
+
+    let pb_start = Arc::clone(&pb);
+    let pb_progress = Arc::clone(&pb);
+    let pb_done = Arc::clone(&pb);
+
     let result = run_index(IndexOptions {
         path,
         db_path: db,
         force,
-        on_progress: Some(Box::new(|msg| {
-            logger::verbose(msg);
+        model,
+        ollama_host,
+        on_embed_start: Some(Box::new(move |total| {
+            let bar = ProgressBar::new(total as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg} [{bar:30}] {pos}/{len} ({eta})")
+                    .unwrap()
+                    .progress_chars("=> "),
+            );
+            bar.set_message("Embedding");
+            *pb_start.lock().unwrap() = Some(bar);
+        })),
+        on_embed_progress: Some(Box::new(move |n| {
+            if let Some(ref bar) = *pb_progress.lock().unwrap() {
+                bar.inc(n as u64);
+            }
+        })),
+        on_embed_done: Some(Box::new(move || {
+            if let Some(ref bar) = *pb_done.lock().unwrap() {
+                bar.finish_and_clear();
+            }
         })),
     })?;
 
@@ -173,6 +215,8 @@ fn run_query_cmd(
     db: Option<String>,
     json: bool,
     verbose: bool,
+    model: Option<String>,
+    ollama_host: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         logger::set_log_level(LogLevel::Verbose);
@@ -193,6 +237,8 @@ fn run_query_cmd(
         threshold,
         db_path: db,
         project_root: None,
+        model,
+        ollama_host,
     })?;
 
     let use_json = json || !io::stdout().is_terminal();
