@@ -1,6 +1,5 @@
-use crate::embedder::ollama_client::OllamaClient;
-use crate::embedder::types::Embedder;
-use crate::error::CodeuseError;
+use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
+use crate::error::VibecheckError;
 use crate::output::types::IndexResult;
 use crate::parser::chunker::parse_file;
 use crate::store::db::{get_meta_value, open_database, set_meta_value};
@@ -21,23 +20,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+/// Number of functions to embed per batch during indexing.
+const INDEX_EMBED_BATCH_SIZE: usize = 32;
+
+/// Reports progress during the embedding phase of indexing.
+pub trait IndexProgress: Send {
+    /// Called before embedding starts. `total` is the number of functions to embed.
+    fn on_start(&self, _total: usize) {}
+    /// Called after each batch completes. `count` is the number embedded in this batch (a delta, not cumulative).
+    fn on_progress(&self, _count: usize) {}
+    /// Called when all embedding is finished.
+    fn on_done(&self) {}
+}
+
 pub struct IndexOptions {
     pub path: Option<String>,
     pub db_path: Option<String>,
     pub force: bool,
-    pub model: Option<String>,
-    pub ollama_host: Option<String>,
-    /// Called before embedding starts with total count
-    pub on_embed_start: Option<Box<dyn Fn(usize)>>,
-    /// Called after each embedding completes
-    pub on_embed_progress: Option<Box<dyn Fn(usize)>>,
-    /// Called when embedding finishes
-    pub on_embed_done: Option<Box<dyn Fn()>>,
+    pub ollama: OllamaConfig,
+    pub progress: Option<Box<dyn IndexProgress>>,
     /// Set to true to cancel the embedding loop
     pub cancel: Option<Arc<AtomicBool>>,
+    /// If provided, skip Ollama preflight and use this embedder directly (for testing).
+    pub embedder: Option<Box<dyn Embedder>>,
 }
 
-pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
+pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     let start_dir = options
         .path
         .as_deref()
@@ -68,25 +76,35 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
 
     logger::info(&format!("Found {} TypeScript files.", files.len()));
 
-    // Preflight Ollama
-    let client = OllamaClient::new(options.ollama_host.as_deref());
-    let (embedder, msg) = client.preflight(options.model.as_deref())?;
-    logger::info(&msg);
+    let (embedder_box, _) = resolve_embedder(
+        options.embedder,
+        &options.ollama,
+    )?;
+    let embedder: &dyn Embedder = embedder_box.as_ref();
 
     // Open database
     let db_path_str = db_path.to_string_lossy().to_string();
     let conn = open_database(&db_path_str)?;
 
     // Check model mismatch
-    if let Some(stored_model) = get_meta_value(&conn, "model_name") {
-        if stored_model != embedder.model_name() && !options.force {
-            return Err(CodeuseError::Index(format!(
-                "Model mismatch: index was built with '{}' but current model is '{}'. \
-                 Use --force to re-index with the new model.",
-                stored_model,
-                embedder.model_name()
-            )));
-        }
+    if let Some(stored_model) = get_meta_value(&conn, "model_name")
+        && stored_model != embedder.model_name()
+        && !options.force
+    {
+        return Err(VibecheckError::Index(format!(
+            "Model mismatch: index was built with '{}' but current model is '{}'. \
+             Use --force to re-index with the new model.",
+            stored_model,
+            embedder.model_name()
+        )));
+    }
+
+    // Check signature hash version
+    let sig_hash_version = get_meta_value(&conn, "signature_hash_version");
+    if sig_hash_version.as_deref() != Some("2") && sig_hash_version.is_some() && !options.force {
+        logger::warn(
+            "Index uses legacy 8-char signature hashes. Run with --force to upgrade to 16-char hashes.",
+        );
     }
 
     // Compute changes
@@ -111,18 +129,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
         changes.unchanged.len()
     ));
 
-    // Delete functions for removed files
-    for fp in &changes.deleted {
-        delete_functions_for_file(&conn, fp)?;
-        remove_tracked_file(&conn, fp)?;
-    }
-
-    // Delete functions for modified files
-    for fp in &changes.modified {
-        delete_functions_for_file(&conn, fp)?;
-    }
-
-    // Parse all added/modified files in parallel
+    // Parse all added/modified files in parallel (no DB access)
     let files_to_process: Vec<&String> = changes
         .added
         .iter()
@@ -149,11 +156,22 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
         .filter_map(|r| r.ok())
         .collect();
 
-    // Upsert tracked files and chunks (sequential — SQLite is single-writer)
+    // Atomic transaction: delete stale data + insert new data.
+    // If anything fails, the DB rolls back to its pre-index state.
+    let tx = conn.unchecked_transaction()?;
+
+    for fp in &changes.deleted {
+        delete_functions_for_file(&tx, fp)?;
+        remove_tracked_file(&tx, fp)?;
+    }
+
+    for fp in &changes.modified {
+        delete_functions_for_file(&tx, fp)?;
+    }
+
     let mut total_chunks = 0;
     for (fp, parsed) in &parse_results {
-        let source = fs::read_to_string(fp)?;
-        let hash = content_hash(&source);
+        let hash = content_hash(&parsed.source);
         let meta = fs::metadata(fp)?;
         let mtime_ms = meta
             .modified()?
@@ -161,49 +179,63 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        upsert_tracked_file(&conn, fp, &hash, mtime_ms)?;
+        upsert_tracked_file(&tx, fp, &hash, mtime_ms)?;
 
         if !parsed.chunks.is_empty() {
-            upsert_functions(&conn, &parsed.chunks)?;
+            upsert_functions(&tx, &parsed.chunks)?;
             total_chunks += parsed.chunks.len();
         }
     }
 
-    // Embed unembedded functions one at a time, writing each to DB immediately
+    tx.commit()?;
+
+    // Embed unembedded functions in batches
     let unembedded = get_functions_without_embeddings(&conn)?;
     if !unembedded.is_empty() {
         let total = unembedded.len();
 
-        if let Some(ref cb) = options.on_embed_start {
-            cb(total);
+        if let Some(ref progress) = options.progress {
+            progress.on_start(total);
         }
 
-        for func in &unembedded {
-            if let Some(ref cancel) = options.cancel {
-                if cancel.load(Ordering::Relaxed) {
-                    logger::info("Indexing cancelled. Progress has been saved.");
-                    break;
-                }
+        let mut cancelled = false;
+        for batch in unembedded.chunks(INDEX_EMBED_BATCH_SIZE) {
+            if let Some(ref cancel) = options.cancel
+                && cancel.load(Ordering::Relaxed)
+            {
+                logger::info("Indexing cancelled. Progress has been saved.");
+                cancelled = true;
+                break;
             }
 
-            let embedding = embedder.embed_query(&func.source_text)?;
-            update_embedding(&conn, &func.id, &embedding)?;
+            let texts: Vec<String> = batch.iter().map(|f| f.source_text.clone()).collect();
+            let embeddings = embedder.embed_batch(&texts, None)?;
 
-            if let Some(ref cb) = options.on_embed_progress {
-                cb(1);
+            for (func, embedding) in batch.iter().zip(embeddings.iter()) {
+                update_embedding(&conn, &func.id, embedding)?;
+            }
+
+            if let Some(ref progress) = options.progress {
+                progress.on_progress(batch.len());
             }
         }
 
-        if let Some(ref cb) = options.on_embed_done {
-            cb();
+        if let Some(ref progress) = options.progress {
+            progress.on_done();
         }
 
-        logger::success(&format!("Embedded {total} functions."));
+        if !cancelled {
+            logger::success(&format!("Embedded {total} functions."));
+        }
     }
 
     // Update metadata
     set_meta_value(&conn, "model_name", embedder.model_name())?;
     set_meta_value(&conn, "model_dimensions", &embedder.dimensions().to_string())?;
+    set_meta_value(&conn, "signature_hash_version", "2")?;
+
+    // Ensure vec0 virtual table exists for indexed KNN queries
+    crate::store::db::ensure_vec_table(&conn, embedder.dimensions())?;
     set_meta_value(
         &conn,
         "last_indexed_at",

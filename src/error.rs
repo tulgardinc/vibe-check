@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub enum CodeuseError {
+pub enum VibecheckError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

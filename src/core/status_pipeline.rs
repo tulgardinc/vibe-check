@@ -1,11 +1,11 @@
-use crate::error::CodeuseError;
+use crate::error::VibecheckError;
 use crate::ignore::ignore_file::load_ignore_file;
 use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::StatusResult;
 use crate::store::db::{get_meta_value, open_database_no_vec};
 use crate::store::file_tracker::get_tracked_files;
-use crate::store::index_store::{count_functions, get_functions_without_embeddings};
-use crate::util::config::find_project_root;
+use crate::store::index_store::{count_functions, count_functions_without_embeddings};
+use crate::util::config::{find_project_root, DB_FILENAME};
 use std::fs;
 use std::path::Path;
 
@@ -13,13 +13,12 @@ pub struct StatusOptions {
     pub db_path: Option<String>,
 }
 
-pub fn run_status(options: StatusOptions) -> Result<StatusResult, CodeuseError> {
+pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError> {
     let project_root = find_project_root(Path::new("."));
 
     let db_path = options
         .db_path
-        .clone()
-        .unwrap_or_else(|| project_root.join(".vibecheck.db").to_string_lossy().to_string());
+        .unwrap_or_else(|| project_root.join(DB_FILENAME).to_string_lossy().to_string());
 
     if !Path::new(&db_path).exists() {
         return Ok(StatusResult {
@@ -40,7 +39,7 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, CodeuseError> 
     let conn = open_database_no_vec(&db_path)?;
 
     let indexed = count_functions(&conn)?;
-    let unembedded = get_functions_without_embeddings(&conn)?.len();
+    let unembedded = count_functions_without_embeddings(&conn)?;
     let tracked = get_tracked_files(&conn)?.len();
 
     let model = get_meta_value(&conn, "model_name").unwrap_or_default();

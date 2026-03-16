@@ -28,7 +28,6 @@ Everything runs locally. No cloud dependencies. Single binary, no runtime needed
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs) (for building)
 - [Ollama](https://ollama.com) running locally
 - An embedding model (auto-detected; prefers `nomic-embed-code`)
 
@@ -37,6 +36,40 @@ ollama pull nomic-embed-code
 ```
 
 ## Install
+
+Download the latest binary for your platform:
+
+**macOS (Apple Silicon)**
+```bash
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-aarch64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-aarch64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
+```
+
+**macOS (Intel)**
+```bash
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-x86_64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-x86_64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
+```
+
+**Linux (x86_64)**
+```bash
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-x86_64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-x86_64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
+```
+
+**Linux (aarch64)**
+```bash
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-aarch64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
+curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-aarch64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
+```
+
+**Windows (x86_64)**
+```powershell
+Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibec.exe"
+Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibecheck-mcp.exe"
+```
+
+### Build from source
 
 ```bash
 git clone https://github.com/tulgardinc/vibe-check.git
@@ -111,7 +144,7 @@ When a match isn't a real duplicate, exclude it:
 ```bash
 # Via MCP: use vibecheck_add_exclusion with the signatureHash values from results
 
-# Exclusions are stored in .codereuse-ignore.json at the project root
+# Exclusions are stored in .vibecheck-ignore.json at the project root
 ```
 
 ## License

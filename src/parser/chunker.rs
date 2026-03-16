@@ -1,15 +1,17 @@
 use crate::parser::signature::compute_signature_hash;
 use crate::parser::types::{ChunkType, FunctionChunk, ParamInfo, ParsedFile};
 use crate::util::hash::sha256;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 const MIN_LINES: usize = 3;
 const MIN_BLOCK_LINES: usize = 6;
 
-fn function_node_types() -> HashSet<&'static str> {
+static FUNCTION_NODE_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "function_declaration",
         "generator_function_declaration",
@@ -19,9 +21,9 @@ fn function_node_types() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
-}
+});
 
-fn control_flow_types() -> HashSet<&'static str> {
+static CONTROL_FLOW_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "if_statement",
         "for_statement",
@@ -33,9 +35,9 @@ fn control_flow_types() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
-}
+});
 
-fn block_parent_types() -> HashSet<&'static str> {
+static BLOCK_PARENT_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "if_statement",
         "for_statement",
@@ -46,6 +48,40 @@ fn block_parent_types() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
+});
+
+static TYPE_NODE_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "type_annotation",
+        "type_arguments",
+        "type_parameters",
+        "as_expression",
+        "satisfies_expression",
+        "return_type",
+    ]
+    .into_iter()
+    .collect()
+});
+
+static STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
+        "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "new",
+        "this", "typeof", "instanceof", "void", "delete", "in", "of", "import", "export",
+        "from", "default", "async", "await", "class", "extends", "implements", "interface",
+        "type", "enum", "true", "false", "null", "undefined",
+    ]
+    .into_iter()
+    .collect()
+});
+
+thread_local! {
+    static PARSER: RefCell<Parser> = RefCell::new({
+        let mut parser = Parser::new();
+        let language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        parser.set_language(&language).expect("failed to set language");
+        parser
+    });
 }
 
 pub fn parse_file(path: &Path) -> Result<ParsedFile, std::io::Error> {
@@ -55,40 +91,40 @@ pub fn parse_file(path: &Path) -> Result<ParsedFile, std::io::Error> {
 }
 
 pub fn parse_source(source: &str, file_path: &str) -> ParsedFile {
-    let mut parser = Parser::new();
-    let language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-    parser.set_language(&language).expect("failed to set language");
+    PARSER.with_borrow_mut(|parser| {
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => {
+                return ParsedFile {
+                    file_path: file_path.to_string(),
+                    source: source.to_string(),
+                    chunks: vec![],
+                    parse_errors: vec!["Failed to parse file".into()],
+                };
+            }
+        };
 
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => {
-            return ParsedFile {
-                file_path: file_path.to_string(),
-                chunks: vec![],
-                parse_errors: vec!["Failed to parse file".into()],
-            };
+        let func_types = &*FUNCTION_NODE_TYPES;
+        let mut chunks = Vec::new();
+        let mut parse_errors = Vec::new();
+
+        walk_node(
+            tree.root_node(),
+            source.as_bytes(),
+            file_path,
+            &mut chunks,
+            &mut parse_errors,
+            false,
+            func_types,
+        );
+
+        ParsedFile {
+            file_path: file_path.to_string(),
+            source: source.to_string(),
+            chunks,
+            parse_errors,
         }
-    };
-
-    let func_types = function_node_types();
-    let mut chunks = Vec::new();
-    let mut parse_errors = Vec::new();
-
-    walk_node(
-        tree.root_node(),
-        source.as_bytes(),
-        file_path,
-        &mut chunks,
-        &mut parse_errors,
-        false,
-        &func_types,
-    );
-
-    ParsedFile {
-        file_path: file_path.to_string(),
-        chunks,
-        parse_errors,
-    }
+    })
 }
 
 fn walk_node(
@@ -130,26 +166,24 @@ fn walk_node(
     if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(value) = child.child_by_field_name("value") {
-                    if func_types.contains(value.kind()) {
-                        if let Some(name_node) = child.child_by_field_name("name") {
-                            let name = name_node.utf8_text(source).unwrap_or("").to_string();
-                            if !name.is_empty() {
-                                if let Some(chunk) = build_chunk(
-                                    &name,
-                                    value,
-                                    node,
-                                    source,
-                                    file_path,
-                                    parent_exported,
-                                ) {
-                                    chunks.push(chunk);
-                                }
-                                extract_blocks(value, source, file_path, &name, chunks, func_types);
-                            }
-                        }
+            if child.kind() == "variable_declarator"
+                && let Some(value) = child.child_by_field_name("value")
+                && func_types.contains(value.kind())
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let name = name_node.utf8_text(source).unwrap_or("").to_string();
+                if !name.is_empty() {
+                    if let Some(chunk) = build_chunk(
+                        &name,
+                        value,
+                        node,
+                        source,
+                        file_path,
+                        parent_exported,
+                    ) {
+                        chunks.push(chunk);
                     }
+                    extract_blocks(value, source, file_path, &name, chunks, func_types);
                 }
             }
         }
@@ -168,6 +202,63 @@ fn walk_node(
             is_export || parent_exported,
             func_types,
         );
+    }
+}
+
+fn format_signature(
+    params: &[ParamInfo],
+    return_type: Option<&str>,
+    chunk_type: ChunkType,
+    line_count: usize,
+) -> String {
+    if chunk_type == ChunkType::Block {
+        return format!("<block> ({line_count} lines)");
+    }
+    let params_str: Vec<String> = params
+        .iter()
+        .map(|p| match &p.type_ {
+            Some(t) => format!("{}: {t}", p.name),
+            None => p.name.clone(),
+        })
+        .collect();
+    match return_type {
+        Some(rt) => format!("({}) => {rt}", params_str.join(", ")),
+        None => format!("({})", params_str.join(", ")),
+    }
+}
+
+/// Collect identifier tokens from the AST, skipping type annotations.
+fn collect_tokens(node: Node, source: &[u8]) -> HashSet<String> {
+    let type_nodes = &*TYPE_NODE_TYPES;
+    let stops = &*STOP_WORDS;
+    let mut tokens = HashSet::new();
+    collect_tokens_recursive(node, source, &mut tokens, type_nodes, stops);
+    tokens
+}
+
+fn collect_tokens_recursive(
+    node: Node,
+    source: &[u8],
+    tokens: &mut HashSet<String>,
+    type_nodes: &HashSet<&str>,
+    stops: &HashSet<&str>,
+) {
+    // Skip type system nodes entirely
+    if type_nodes.contains(node.kind()) {
+        return;
+    }
+
+    if node.kind() == "identifier" || node.kind() == "property_identifier" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let lower = text.to_lowercase();
+        if lower.len() > 1 && !stops.contains(lower.as_str()) {
+            tokens.insert(lower);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_tokens_recursive(child, source, tokens, type_nodes, stops);
     }
 }
 
@@ -192,8 +283,9 @@ fn build_chunk(
     let start_line = start_row + 1;
     let end_line = end_row + 1;
     let source_text = span_node.utf8_text(source).unwrap_or("").to_string();
-    let signature_hash =
-        compute_signature_hash(name, &params, return_type.as_deref());
+    let signature_hash = compute_signature_hash(name, &params, return_type.as_deref());
+    let signature = format_signature(&params, return_type.as_deref(), ChunkType::Function, line_count);
+    let tokens = collect_tokens(span_node, source);
 
     Some(FunctionChunk {
         id: format!("{file_path}:{name}:{start_line}"),
@@ -206,6 +298,8 @@ fn build_chunk(
         return_type,
         is_exported,
         signature_hash,
+        signature,
+        tokens,
         chunk_type: ChunkType::Function,
         context: None,
     })
@@ -232,15 +326,16 @@ fn walk_for_blocks(
     chunks: &mut Vec<FunctionChunk>,
     func_types: &HashSet<&str>,
 ) {
-    let block_parents = block_parent_types();
+    let block_parents = &*BLOCK_PARENT_TYPES;
 
     if block_parents.contains(node.kind()) {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "statement_block" && is_eligible_block(child) {
-                if let Some(chunk) = build_block_chunk(child, source, file_path, context_name) {
-                    chunks.push(chunk);
-                }
+            if child.kind() == "statement_block"
+                && is_eligible_block(child)
+                && let Some(chunk) = build_block_chunk(child, source, file_path, context_name)
+            {
+                chunks.push(chunk);
             }
         }
     }
@@ -249,22 +344,16 @@ fn walk_for_blocks(
     if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(value) = child.child_by_field_name("value") {
-                    if value.kind() == "arrow_function" {
-                        if let Some(arrow_body) = value.child_by_field_name("body") {
-                            if arrow_body.kind() == "statement_block"
-                                && is_eligible_block(arrow_body)
-                            {
-                                if let Some(chunk) =
-                                    build_block_chunk(arrow_body, source, file_path, context_name)
-                                {
-                                    chunks.push(chunk);
-                                }
-                            }
-                        }
-                    }
-                }
+            if child.kind() == "variable_declarator"
+                && let Some(value) = child.child_by_field_name("value")
+                && value.kind() == "arrow_function"
+                && let Some(arrow_body) = value.child_by_field_name("body")
+                && arrow_body.kind() == "statement_block"
+                && is_eligible_block(arrow_body)
+                && let Some(chunk) =
+                    build_block_chunk(arrow_body, source, file_path, context_name)
+            {
+                chunks.push(chunk);
             }
         }
     }
@@ -284,7 +373,7 @@ fn is_eligible_block(block: Node) -> bool {
         return false;
     }
 
-    let cf_types = control_flow_types();
+    let cf_types = &*CONTROL_FLOW_TYPES;
     let mut statement_count = 0;
     let mut has_control_flow = false;
 
@@ -307,9 +396,15 @@ fn build_block_chunk(
 ) -> Option<FunctionChunk> {
     let start_line = block.start_position().row + 1;
     let end_line = block.end_position().row + 1;
+    let line_count = end_line - start_line + 1;
     let source_text = block.utf8_text(source).unwrap_or("").to_string();
     let synthetic_name = format!("<block:{start_line}>");
-    let signature_hash = sha256(&source_text)[..8].to_string();
+    // Block hashes are content-based (unlike function signature hashes which use
+    // name + param types + return type). This means block exclusions become stale
+    // when the block's source text changes, even for whitespace-only edits.
+    let signature_hash = sha256(&source_text)[..16].to_string();
+    let signature = format_signature(&[], None, ChunkType::Block, line_count);
+    let tokens = collect_tokens(block, source);
 
     Some(FunctionChunk {
         id: format!("{file_path}:{synthetic_name}:{start_line}"),
@@ -322,6 +417,8 @@ fn build_block_chunk(
         return_type: None,
         is_exported: false,
         signature_hash,
+        signature,
+        tokens,
         chunk_type: ChunkType::Block,
         context: Some(context_name.to_string()),
     })
@@ -369,8 +466,7 @@ fn extract_params(node: Node, source: &[u8]) -> Vec<ParamInfo> {
 
         let type_annotation = child
             .child_by_field_name("type")
-            .map(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")))
-            .flatten();
+            .and_then(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")));
 
         params.push(ParamInfo {
             name: param_name,
@@ -383,16 +479,11 @@ fn extract_params(node: Node, source: &[u8]) -> Vec<ParamInfo> {
 
 fn extract_return_type(node: Node, source: &[u8]) -> Option<String> {
     node.child_by_field_name("return_type")
-        .map(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")))
-        .flatten()
+        .and_then(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")))
 }
 
 fn strip_type_prefix(text: &str) -> Option<String> {
-    let trimmed = if text.starts_with(':') {
-        text[1..].trim()
-    } else {
-        text.trim()
-    };
+    let trimmed = text.strip_prefix(':').unwrap_or(text).trim();
 
     if trimmed.is_empty() {
         None
@@ -424,6 +515,7 @@ function greet(name: string): string {
         );
         assert_eq!(parsed.chunks[0].return_type.as_deref(), Some("string"));
         assert_eq!(parsed.chunks[0].chunk_type, ChunkType::Function);
+        assert_eq!(parsed.chunks[0].signature, "(name: string) => string");
     }
 
     #[test]
@@ -490,7 +582,7 @@ class MyClass {
     }
 
     #[test]
-    fn signature_hash_is_8_hex() {
+    fn signature_hash_is_16_hex() {
         let source = r#"
 function testFunc(a: string, b: number): boolean {
     const check = a.length > b;
@@ -498,10 +590,38 @@ function testFunc(a: string, b: number): boolean {
 }
 "#;
         let parsed = parse_source(source, "test.ts");
-        assert_eq!(parsed.chunks[0].signature_hash.len(), 8);
+        assert_eq!(parsed.chunks[0].signature_hash.len(), 16);
         assert!(parsed.chunks[0]
             .signature_hash
             .chars()
             .all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn tokens_extracted_from_ast() {
+        let source = r#"
+function process(items: string[], count: number): boolean {
+    const filtered = items.filter(x => x.length > count);
+    return filtered.length > 0;
+}
+"#;
+        let parsed = parse_source(source, "test.ts");
+        let tokens = &parsed.chunks[0].tokens;
+        // Identifiers from value positions should be present
+        assert!(tokens.contains("items"));
+        assert!(tokens.contains("filtered"));
+        assert!(tokens.contains("count"));
+        assert!(tokens.contains("length"));
+        // Stop words should be absent
+        assert!(!tokens.contains("const"));
+        assert!(!tokens.contains("return"));
+        assert!(!tokens.contains("function"));
+    }
+
+    #[test]
+    fn parsed_file_contains_source() {
+        let source = "function foo() { return 1; }";
+        let parsed = parse_source(source, "test.ts");
+        assert_eq!(parsed.source, source);
     }
 }

@@ -1,5 +1,18 @@
+use crate::error::VibecheckError;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
+
+pub const DB_FILENAME: &str = ".vibecheck.db";
+
+pub fn resolve_project_root(provided: Option<&str>) -> PathBuf {
+    match provided {
+        Some(p) => {
+            let path = Path::new(p);
+            path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        }
+        None => find_project_root(Path::new(".")),
+    }
+}
 
 pub fn find_project_root(start_dir: &Path) -> PathBuf {
     let mut dir = start_dir.canonicalize().unwrap_or_else(|_| start_dir.to_path_buf());
@@ -19,8 +32,28 @@ pub fn find_project_root(start_dir: &Path) -> PathBuf {
 pub fn resolve_db_path(project_root: &Path, override_path: Option<&str>) -> PathBuf {
     match override_path {
         Some(p) => PathBuf::from(p).canonicalize().unwrap_or_else(|_| PathBuf::from(p)),
-        None => project_root.join(".vibecheck.db"),
+        None => project_root.join(DB_FILENAME),
     }
+}
+
+/// Resolve DB path and verify it exists. Used by query, scan, and status pipelines.
+pub fn resolve_existing_db(
+    project_root: &Path,
+    override_path: Option<&str>,
+) -> Result<String, VibecheckError> {
+    let db_path = match override_path {
+        Some(p) => p.to_string(),
+        None => project_root
+            .join(DB_FILENAME)
+            .to_string_lossy()
+            .to_string(),
+    };
+    if !Path::new(&db_path).exists() {
+        return Err(VibecheckError::Config(
+            "No index found. Run `vibec index` first.".into(),
+        ));
+    }
+    Ok(db_path)
 }
 
 pub fn find_typescript_files(root_dir: &Path) -> Vec<PathBuf> {

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use vibecheck::core::index_pipeline::{run_index, IndexOptions};
+use vibecheck::core::index_pipeline::{run_index, IndexOptions, IndexProgress};
 use vibecheck::core::query_pipeline::{run_query, QueryOptions};
 use vibecheck::core::scan_pipeline::{run_scan, ScanOptions};
 use vibecheck::core::status_pipeline::{run_status, StatusOptions};
@@ -98,8 +98,10 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    let model = cli.model;
-    let ollama_host = cli.ollama_host;
+    let ollama = vibecheck::embedder::types::OllamaConfig {
+        model: cli.model,
+        host: cli.ollama_host,
+    };
 
     let result = match cli.command {
         Commands::Index {
@@ -108,7 +110,7 @@ fn main() {
             force,
             verbose,
             dry_run,
-        } => run_index_cmd(path, db, force, verbose, dry_run, model, ollama_host),
+        } => run_index_cmd(path, db, force, verbose, dry_run, ollama.clone()),
         Commands::Query {
             file,
             stdin,
@@ -117,7 +119,7 @@ fn main() {
             db,
             json,
             verbose,
-        } => run_query_cmd(file, stdin, top_k, threshold, db, json, verbose, model, ollama_host),
+        } => run_query_cmd(file, stdin, top_k, threshold, db, json, verbose, ollama.clone()),
         Commands::Scan {
             top_n,
             threshold,
@@ -140,8 +142,7 @@ fn run_index_cmd(
     force: bool,
     verbose: bool,
     dry_run: bool,
-    model: Option<String>,
-    ollama_host: Option<String>,
+    ollama: vibecheck::embedder::types::OllamaConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         logger::set_log_level(LogLevel::Verbose);
@@ -158,21 +159,12 @@ fn run_index_cmd(
         return Ok(());
     }
 
-    use std::sync::Arc;
+    struct CliProgress {
+        bar: std::sync::Mutex<Option<ProgressBar>>,
+    }
 
-    let pb: Arc<std::sync::Mutex<Option<ProgressBar>>> = Arc::new(std::sync::Mutex::new(None));
-
-    let pb_start = Arc::clone(&pb);
-    let pb_progress = Arc::clone(&pb);
-    let pb_done = Arc::clone(&pb);
-
-    let result = run_index(IndexOptions {
-        path,
-        db_path: db,
-        force,
-        model,
-        ollama_host,
-        on_embed_start: Some(Box::new(move |total| {
+    impl IndexProgress for CliProgress {
+        fn on_start(&self, total: usize) {
             let bar = ProgressBar::new(total as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
@@ -181,19 +173,32 @@ fn run_index_cmd(
                     .progress_chars("=> "),
             );
             bar.set_message("Embedding");
-            *pb_start.lock().unwrap() = Some(bar);
-        })),
-        on_embed_progress: Some(Box::new(move |n| {
-            if let Some(ref bar) = *pb_progress.lock().unwrap() {
-                bar.inc(n as u64);
+            *self.bar.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar);
+        }
+
+        fn on_progress(&self, count: usize) {
+            if let Some(ref bar) = *self.bar.lock().unwrap_or_else(|e| e.into_inner()) {
+                bar.inc(count as u64);
             }
-        })),
-        on_embed_done: Some(Box::new(move || {
-            if let Some(ref bar) = *pb_done.lock().unwrap() {
+        }
+
+        fn on_done(&self) {
+            if let Some(ref bar) = *self.bar.lock().unwrap_or_else(|e| e.into_inner()) {
                 bar.finish_and_clear();
             }
+        }
+    }
+
+    let result = run_index(IndexOptions {
+        path,
+        db_path: db,
+        force,
+        ollama,
+        progress: Some(Box::new(CliProgress {
+            bar: std::sync::Mutex::new(None),
         })),
         cancel: None,
+        embedder: None,
     })?;
 
     logger::success(&format!(
@@ -208,6 +213,7 @@ fn run_index_cmd(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_query_cmd(
     file: String,
     stdin: bool,
@@ -216,8 +222,7 @@ fn run_query_cmd(
     db: Option<String>,
     json: bool,
     verbose: bool,
-    model: Option<String>,
-    ollama_host: Option<String>,
+    ollama: vibecheck::embedder::types::OllamaConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         logger::set_log_level(LogLevel::Verbose);
@@ -238,8 +243,8 @@ fn run_query_cmd(
         threshold,
         db_path: db,
         project_root: None,
-        model,
-        ollama_host,
+        ollama,
+        embedder: None,
     })?;
 
     let use_json = json || !io::stdout().is_terminal();
@@ -286,34 +291,6 @@ fn run_scan_cmd(
 
 fn run_status_cmd(db: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let result = run_status(StatusOptions { db_path: db })?;
-
-    if !result.exists {
-        println!("No index found. Run `vibec index` to create one.");
-        return Ok(());
-    }
-
-    println!("Database: {} ({} MB)", result.db_path, result.size_mb);
-    println!("Model: {}", result.model);
-    println!("Dimensions: {}", result.dimensions);
-
-    let unembedded_suffix = if result.unembedded > 0 {
-        format!(" ({} awaiting embedding)", result.unembedded)
-    } else {
-        String::new()
-    };
-    println!(
-        "Indexed functions: {}{}",
-        result.indexed_functions, unembedded_suffix
-    );
-    println!("Tracked files: {}", result.tracked_files);
-    println!("Last indexed: {}", result.last_indexed);
-
-    let stale_suffix = if result.stale_exclusions > 0 {
-        format!(" ({} stale)", result.stale_exclusions)
-    } else {
-        String::new()
-    };
-    println!("Exclusions: {}{}", result.exclusions, stale_suffix);
-
+    println!("{}", vibecheck::output::formatter::format_status_human(&result));
     Ok(())
 }

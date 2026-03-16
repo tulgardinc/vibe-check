@@ -1,3 +1,4 @@
+use crate::store::types::StoredFunction;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +72,21 @@ pub struct ScanMatchEntry {
     pub context: Option<String>,
 }
 
+impl From<&StoredFunction> for ScanMatchEntry {
+    fn from(f: &StoredFunction) -> Self {
+        Self {
+            name: f.function_name.clone(),
+            path: f.file_path.clone(),
+            line: f.start_line as usize,
+            line_count: f.line_count(),
+            signature: f.signature.clone(),
+            signature_hash: f.signature_hash.clone(),
+            chunk_type: Some(f.chunk_type.as_str().to_string()),
+            context: f.context.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanMatch {
@@ -98,14 +114,27 @@ pub struct ScanResult {
     pub meta: ScanMeta,
 }
 
+pub const SIMILARITY_TIERS: &[&str] = &[
+    "identical",
+    "nearly identical",
+    "very similar",
+    "similar",
+    "weak",
+];
+
+const TIER_IDENTICAL: f64 = 0.01;
+const TIER_NEARLY_IDENTICAL: f64 = 0.05;
+const TIER_VERY_SIMILAR: f64 = 0.12;
+const TIER_SIMILAR: f64 = 0.20;
+
 pub fn similarity_tier(distance: f64) -> &'static str {
-    if distance <= 0.01 {
+    if distance <= TIER_IDENTICAL {
         "identical"
-    } else if distance <= 0.05 {
+    } else if distance <= TIER_NEARLY_IDENTICAL {
         "nearly identical"
-    } else if distance <= 0.12 {
+    } else if distance <= TIER_VERY_SIMILAR {
         "very similar"
-    } else if distance <= 0.20 {
+    } else if distance <= TIER_SIMILAR {
         "similar"
     } else {
         "weak"
@@ -138,3 +167,26 @@ pub struct IndexResult {
     pub tier: String,
     pub dimensions: usize,
 }
+
+pub fn format_similarity(distance: f64) -> String {
+    format!("{:.2}", 1.0 - distance)
+}
+
+pub fn format_jaccard_suffix(jaccard: Option<f64>) -> String {
+    match jaccard {
+        Some(j) => format!(", jaccard: {j:.2}"),
+        None => String::new(),
+    }
+}
+
+pub fn format_display_name(
+    name: &str,
+    chunk_type: Option<&str>,
+    context: Option<&str>,
+) -> String {
+    match (chunk_type, context) {
+        (Some("block"), Some(ctx)) => format!("{name} in {ctx}"),
+        _ => name.to_string(),
+    }
+}
+

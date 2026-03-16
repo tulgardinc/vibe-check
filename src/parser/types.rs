@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamInfo {
@@ -35,6 +36,8 @@ pub struct FunctionChunk {
     pub return_type: Option<String>,
     pub is_exported: bool,
     pub signature_hash: String,
+    pub signature: String,
+    pub tokens: HashSet<String>,
     pub chunk_type: ChunkType,
     pub context: Option<String>,
 }
@@ -43,31 +46,12 @@ impl FunctionChunk {
     pub fn line_count(&self) -> usize {
         self.end_line.saturating_sub(self.start_line) + 1
     }
-
-    pub fn signature(&self) -> String {
-        if self.chunk_type == ChunkType::Block {
-            return format!("<block> ({} lines)", self.line_count());
-        }
-
-        let params: Vec<String> = self
-            .params
-            .iter()
-            .map(|p| match &p.type_ {
-                Some(t) => format!("{}: {t}", p.name),
-                None => p.name.clone(),
-            })
-            .collect();
-
-        match &self.return_type {
-            Some(rt) => format!("({}) => {rt}", params.join(", ")),
-            None => format!("({})", params.join(", ")),
-        }
-    }
 }
 
 #[derive(Debug)]
 pub struct ParsedFile {
     pub file_path: String,
+    pub source: String,
     pub chunks: Vec<FunctionChunk>,
     pub parse_errors: Vec<String>,
 }

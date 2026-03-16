@@ -1,4 +1,4 @@
-use crate::error::CodeuseError;
+use crate::error::VibecheckError;
 use crate::store::types::FileRecord;
 use crate::util::hash::content_hash;
 use rusqlite::Connection;
@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::UNIX_EPOCH;
 
-pub fn get_tracked_files(conn: &Connection) -> Result<HashMap<String, FileRecord>, CodeuseError> {
+pub fn get_tracked_files(conn: &Connection) -> Result<HashMap<String, FileRecord>, VibecheckError> {
     let mut stmt = conn.prepare_cached("SELECT * FROM tracked_files")?;
     let rows = stmt.query_map([], |row| {
         Ok(FileRecord {
@@ -18,7 +18,8 @@ pub fn get_tracked_files(conn: &Connection) -> Result<HashMap<String, FileRecord
     })?;
 
     let mut map = HashMap::new();
-    for row in rows.flatten() {
+    for row in rows {
+        let row = row?;
         map.insert(row.file_path.clone(), row);
     }
     Ok(map)
@@ -29,7 +30,7 @@ pub fn upsert_tracked_file(
     file_path: &str,
     hash: &str,
     mtime_ms: i64,
-) -> Result<(), CodeuseError> {
+) -> Result<(), VibecheckError> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.prepare_cached(
         "INSERT OR REPLACE INTO tracked_files (file_path, content_hash, mtime_ms, indexed_at)
@@ -39,7 +40,7 @@ pub fn upsert_tracked_file(
     Ok(())
 }
 
-pub fn remove_tracked_file(conn: &Connection, file_path: &str) -> Result<(), CodeuseError> {
+pub fn remove_tracked_file(conn: &Connection, file_path: &str) -> Result<(), VibecheckError> {
     conn.prepare_cached("DELETE FROM tracked_files WHERE file_path = ?")?
         .execute([file_path])?;
     Ok(())
@@ -56,7 +57,7 @@ pub struct FileChanges {
 pub fn compute_changed_files(
     conn: &Connection,
     file_paths: &[String],
-) -> Result<FileChanges, CodeuseError> {
+) -> Result<FileChanges, VibecheckError> {
     let tracked = get_tracked_files(conn)?;
     let current_set: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
 

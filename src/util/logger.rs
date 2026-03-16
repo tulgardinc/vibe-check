@@ -31,56 +31,33 @@ fn use_color() -> bool {
     std::env::var("NO_COLOR").is_err() && io::stderr().is_terminal()
 }
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const YELLOW: &str = "\x1b[33m";
-const GREEN: &str = "\x1b[32m";
-const CYAN: &str = "\x1b[36m";
+fn log(min_level: u8, prefix: &str, color_prefix: &str, message: &str) {
+    if current_level() < min_level {
+        return;
+    }
+    if use_color() {
+        let _ = writeln!(io::stderr(), "{color_prefix}{message}\x1b[0m");
+    } else {
+        let _ = writeln!(io::stderr(), "{prefix}{message}");
+    }
+}
 
 pub fn info(message: &str) {
-    if current_level() >= LEVEL_NORMAL {
-        if use_color() {
-            let _ = writeln!(io::stderr(), "{CYAN}info{RESET}  {message}");
-        } else {
-            let _ = writeln!(io::stderr(), "info  {message}");
-        }
-    }
+    log(LEVEL_NORMAL, "info  ", "\x1b[36minfo\x1b[0m  ", message);
 }
 
 pub fn success(message: &str) {
-    if current_level() >= LEVEL_NORMAL {
-        if use_color() {
-            let _ = writeln!(io::stderr(), "{GREEN}{BOLD}done{RESET}  {message}");
-        } else {
-            let _ = writeln!(io::stderr(), "done  {message}");
-        }
-    }
+    log(LEVEL_NORMAL, "done  ", "\x1b[32m\x1b[1mdone\x1b[0m  ", message);
 }
 
 pub fn verbose(message: &str) {
-    if current_level() >= LEVEL_VERBOSE {
-        if use_color() {
-            let _ = writeln!(io::stderr(), "{DIM}    {message}{RESET}");
-        } else {
-            let _ = writeln!(io::stderr(), "    {message}");
-        }
-    }
+    log(LEVEL_VERBOSE, "    ", "\x1b[2m    ", message);
 }
 
 pub fn warn(message: &str) {
-    if use_color() {
-        let _ = writeln!(io::stderr(), "{YELLOW}{BOLD}warn{RESET}  {message}");
-    } else {
-        let _ = writeln!(io::stderr(), "warn  {message}");
-    }
+    log(LEVEL_QUIET, "warn  ", "\x1b[33m\x1b[1mwarn\x1b[0m  ", message);
 }
 
 pub fn error(message: &str) {
-    if use_color() {
-        let _ = writeln!(io::stderr(), "{RED}{BOLD}error{RESET} {message}");
-    } else {
-        let _ = writeln!(io::stderr(), "error {message}");
-    }
+    log(LEVEL_QUIET, "error ", "\x1b[31m\x1b[1merror\x1b[0m ", message);
 }

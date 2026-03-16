@@ -36,10 +36,16 @@ impl Default for IgnoreFile {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PairSide {
+    A,
+    B,
+}
+
 #[derive(Debug)]
 pub struct StaleWarning {
     pub exclusion_index: usize,
-    pub side: char,
+    pub side: PairSide,
     pub function_name: String,
     pub path: String,
     pub reason: String,

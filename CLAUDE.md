@@ -36,7 +36,7 @@ Three-stage pipeline in `src/`:
 1. **Parser** (`parser/`) — tree-sitter extracts function-level chunks from TypeScript ASTs. Signature hashing in `signature.rs`.
 2. **Embedder** (`embedder/`) — Ollama HTTP client with auto-start, model detection.
 3. **Store** (`store/`) — SQLite + sqlite-vec. `db.rs` has schema, `index_store.rs` handles upsert and KNN cosine search, `file_tracker.rs` does incremental indexing.
-4. **Ignore** (`ignore/`) — `.codereuse-ignore.json` stores pair-level false positive exclusions.
+4. **Ignore** (`ignore/`) — `.vibecheck-ignore.json` stores pair-level false positive exclusions.
 5. **Ranking** (`ranking/`) — Jaccard token-based re-ranking of embedding candidates.
 6. **Output** (`output/`) — JSON and human-readable formatting.
 

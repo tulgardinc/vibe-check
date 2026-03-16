@@ -1,12 +1,18 @@
 use crate::embedder::embed::OllamaEmbedder;
 use crate::embedder::types::ModelInfo;
-use crate::error::CodeuseError;
+use crate::error::VibecheckError;
 use crate::util::logger;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+
+const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_POLL_ATTEMPTS: u32 = 20;
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct OllamaClient {
     client: Client,
@@ -34,30 +40,35 @@ struct EmbedResponse {
     embeddings: Vec<Vec<f32>>,
 }
 
+fn format_available_models(names: &[String]) -> String {
+    if names.is_empty() {
+        "\n  No models are currently installed in Ollama.".to_string()
+    } else {
+        format!("\n  Models currently in Ollama: {}", names.join(", "))
+    }
+}
+
 impl OllamaClient {
     pub fn new(host: Option<&str>) -> Self {
         let base_url = host
             .map(String::from)
             .or_else(|| std::env::var("OLLAMA_HOST").ok())
-            .unwrap_or_else(|| "http://localhost:11434".to_string());
+            .unwrap_or_else(|| DEFAULT_OLLAMA_HOST.to_string());
 
-        Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(600))
-                .build()
-                .unwrap_or_default(),
-            base_url,
-        }
+        let client = Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .expect("failed to build HTTP client");
+
+        Self { client, base_url }
     }
 
     pub fn check_health(&self) -> bool {
-        self.client
-            .get(format!("{}/api/tags", self.base_url))
-            .send()
-            .is_ok()
+        self.list_models().is_ok()
     }
 
-    pub fn list_models(&self) -> Result<Vec<String>, CodeuseError> {
+    pub fn list_models(&self) -> Result<Vec<String>, VibecheckError> {
         let resp: ListResponse = self
             .client
             .get(format!("{}/api/tags", self.base_url))
@@ -66,7 +77,7 @@ impl OllamaClient {
         Ok(resp.models.into_iter().map(|m| m.name).collect())
     }
 
-    pub fn embed(&self, model: &str, inputs: &[&str]) -> Result<Vec<Vec<f32>>, CodeuseError> {
+    pub fn embed(&self, model: &str, inputs: &[&str]) -> Result<Vec<Vec<f32>>, VibecheckError> {
         let response = self
             .client
             .post(format!("{}/api/embed", self.base_url))
@@ -77,13 +88,13 @@ impl OllamaClient {
         let body = response.text()?;
 
         if !status.is_success() {
-            return Err(CodeuseError::Ollama(format!(
+            return Err(VibecheckError::Ollama(format!(
                 "Ollama embed returned {status}: {body}"
             )));
         }
 
         let resp: EmbedResponse = serde_json::from_str(&body).map_err(|e| {
-            CodeuseError::Ollama(format!(
+            VibecheckError::Ollama(format!(
                 "Failed to parse Ollama response: {e}\nResponse body (first 500 chars): {}",
                 &body[..body.len().min(500)]
             ))
@@ -93,7 +104,7 @@ impl OllamaClient {
     }
 
     /// Resolve which model to use. Checks (in order): explicit argument, VIBECHECK_MODEL env var, auto-detect.
-    pub fn resolve_model(&self, explicit: Option<&str>) -> Result<ModelInfo, CodeuseError> {
+    pub fn resolve_model(&self, explicit: Option<&str>) -> Result<ModelInfo, VibecheckError> {
         let model_name = explicit
             .map(String::from)
             .or_else(|| std::env::var("VIBECHECK_MODEL").ok());
@@ -104,12 +115,8 @@ impl OllamaClient {
                 let names = self.list_models()?;
                 let found = names.iter().any(|n| n == &name || n.starts_with(&format!("{name}:")));
                 if !found {
-                    let available = if names.is_empty() {
-                        "\n  No models are currently installed in Ollama.".to_string()
-                    } else {
-                        format!("\n  Models currently in Ollama: {}", names.join(", "))
-                    };
-                    return Err(CodeuseError::Ollama(format!(
+                    let available = format_available_models(&names);
+                    return Err(VibecheckError::Ollama(format!(
                         "Model '{name}' not found in Ollama.{available}\n\n\
                          Pull it with: ollama pull {name}"
                     )));
@@ -125,7 +132,7 @@ impl OllamaClient {
         }
     }
 
-    fn detect_model(&self) -> Result<ModelInfo, CodeuseError> {
+    fn detect_model(&self) -> Result<ModelInfo, VibecheckError> {
         let names = self.list_models()?;
 
         struct Candidate {
@@ -169,13 +176,9 @@ impl OllamaClient {
             }
         }
 
-        let available = if names.is_empty() {
-            "\n  No models are currently installed in Ollama.".to_string()
-        } else {
-            format!("\n  Models currently in Ollama: {}", names.join(", "))
-        };
+        let available = format_available_models(&names);
 
-        Err(CodeuseError::Ollama(format!(
+        Err(VibecheckError::Ollama(format!(
             "No compatible embedding model found in Ollama.{available}\n\n\
              vibecheck needs a Nomic embedding model. Choose one:\n\n\
              \x20   ollama pull nomic-embed-text      (recommended, 274 MB, works on CPU and GPU)\n\
@@ -185,11 +188,11 @@ impl OllamaClient {
         )))
     }
 
-    fn detect_dimensions(&self, model_name: &str) -> Result<usize, CodeuseError> {
+    fn detect_dimensions(&self, model_name: &str) -> Result<usize, VibecheckError> {
         let embeddings = self.embed(model_name, &["test"])?;
         match embeddings.first() {
             Some(v) => Ok(v.len()),
-            None => Err(CodeuseError::Ollama(
+            None => Err(VibecheckError::Ollama(
                 "No embedding returned for dimension detection".into(),
             )),
         }
@@ -203,13 +206,12 @@ impl OllamaClient {
             .spawn();
 
         match result {
-            Ok(child) => {
-                // Detach the child process
-                let _ = child.id();
+            Ok(_child) => {
+                // Child is detached by not calling .wait()
                 logger::info("Ollama not running — starting it automatically...");
 
-                for _ in 0..10 {
-                    thread::sleep(Duration::from_millis(500));
+                for _ in 0..STARTUP_POLL_ATTEMPTS {
+                    thread::sleep(STARTUP_POLL_INTERVAL);
                     if self.check_health() {
                         logger::info("Ollama started.");
                         return true;
@@ -221,17 +223,15 @@ impl OllamaClient {
         }
     }
 
-    pub fn preflight(&self, model_override: Option<&str>) -> Result<(OllamaEmbedder<'_>, String), CodeuseError> {
+    pub fn preflight(self, model_override: Option<&str>) -> Result<(OllamaEmbedder, String), VibecheckError> {
         let mut healthy = self.check_health();
 
-        if !healthy {
-            if self.try_start_ollama() {
-                healthy = self.check_health();
-            }
+        if !healthy && self.try_start_ollama() {
+            healthy = self.check_health();
         }
 
         if !healthy {
-            return Err(CodeuseError::Ollama(
+            return Err(VibecheckError::Ollama(
                 "Ollama is not running and could not be started automatically.\n\n\
                  To set up Ollama:\n\
                  \x20 1. Install from https://ollama.com\n\

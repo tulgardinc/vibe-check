@@ -1,4 +1,4 @@
-use crate::output::types::ScanResult;
+use crate::output::types::{ScanResult, SIMILARITY_TIERS, format_display_name, format_jaccard_suffix};
 use std::path::Path;
 
 pub fn format_scan_json(result: &ScanResult) -> String {
@@ -9,19 +9,11 @@ pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
     let mut out = String::new();
 
     if result.matches.is_empty() {
-        out.push_str("No similar function pairs found.\n");
+        out.push_str("No similar function pairs found\n");
         return out;
     }
 
-    let tiers = [
-        "identical",
-        "nearly identical",
-        "very similar",
-        "similar",
-        "weak",
-    ];
-
-    for tier in &tiers {
+    for tier in SIMILARITY_TIERS {
         let group: Vec<_> = result
             .matches
             .iter()
@@ -45,13 +37,18 @@ pub fn format_scan_human(result: &ScanResult, project_root: &Path) -> String {
             let rel_b = make_relative(&m.b.path, project_root);
             let pct = ((1.0 - m.distance) * 100.0) as u32;
 
-            let name_a = format_display_name(&m.a.name, &m.a.chunk_type, &m.a.context);
-            let name_b = format_display_name(&m.b.name, &m.b.chunk_type, &m.b.context);
+            let name_a = format_display_name(
+                &m.a.name,
+                m.a.chunk_type.as_deref(),
+                m.a.context.as_deref(),
+            );
+            let name_b = format_display_name(
+                &m.b.name,
+                m.b.chunk_type.as_deref(),
+                m.b.context.as_deref(),
+            );
 
-            let jaccard_info = match m.jaccard_similarity {
-                Some(j) => format!(", jaccard: {j:.2}"),
-                None => String::new(),
-            };
+            let jaccard_info = format_jaccard_suffix(m.jaccard_similarity);
 
             out.push_str(&format!(
                 "  {name_a} ({rel_a}:{}, {}L) {}\n",
@@ -81,15 +78,4 @@ fn make_relative(path: &str, project_root: &Path) -> String {
     p.strip_prefix(project_root)
         .map(|r| r.to_string_lossy().to_string())
         .unwrap_or_else(|_| path.to_string())
-}
-
-fn format_display_name(
-    name: &str,
-    chunk_type: &Option<String>,
-    context: &Option<String>,
-) -> String {
-    match (chunk_type.as_deref(), context.as_deref()) {
-        (Some("block"), Some(ctx)) => format!("{name} in {ctx}"),
-        _ => name.to_string(),
-    }
 }

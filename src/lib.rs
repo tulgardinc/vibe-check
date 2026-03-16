@@ -2,6 +2,7 @@ pub mod core;
 pub mod embedder;
 pub mod error;
 pub mod ignore;
+pub mod mcp_server;
 pub mod output;
 pub mod parser;
 pub mod ranking;

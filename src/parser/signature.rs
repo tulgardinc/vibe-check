@@ -23,7 +23,7 @@ pub fn compute_signature_hash(
     };
 
     let input = format!("{normalized_name}({normalized_params}):{normalized_return}");
-    sha256(&input)[..8].to_string()
+    sha256(&input)[..16].to_string()
 }
 
 #[cfg(test)]
@@ -31,9 +31,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn produces_8_char_hex() {
+    fn produces_16_char_hex() {
         let hash = compute_signature_hash("myFunc", &[], None);
-        assert_eq!(hash.len(), 8);
+        assert_eq!(hash.len(), 16);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -93,6 +93,6 @@ mod tests {
         }];
         // null type defaults to "any", null return defaults to "void"
         let hash = compute_signature_hash("f", &params, None);
-        assert_eq!(hash.len(), 8);
+        assert_eq!(hash.len(), 16);
     }
 }

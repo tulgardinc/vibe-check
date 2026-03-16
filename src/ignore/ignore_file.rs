@@ -3,19 +3,28 @@ use crate::util::logger;
 use std::fs;
 use std::path::Path;
 
-const FILENAME: &str = ".codereuse-ignore.json";
+const FILENAME: &str = ".vibecheck-ignore.json";
+const LEGACY_FILENAME: &str = ".codereuse-ignore.json";
 
 pub fn load_ignore_file(project_root: &Path) -> IgnoreFile {
     let file_path = project_root.join(FILENAME);
 
-    if !file_path.exists() {
-        return IgnoreFile::default();
-    }
+    // Fall back to legacy filename if the new one doesn't exist
+    let (file_path, display_name) = if file_path.exists() {
+        (file_path, FILENAME)
+    } else {
+        let legacy_path = project_root.join(LEGACY_FILENAME);
+        if legacy_path.exists() {
+            (legacy_path, LEGACY_FILENAME)
+        } else {
+            return IgnoreFile::default();
+        }
+    };
 
     let content = match fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
-            logger::warn(&format!("Failed to read {FILENAME}: {e} — treating as empty"));
+            logger::warn(&format!("Failed to read {display_name}: {e} — treating as empty"));
             return IgnoreFile::default();
         }
     };
@@ -24,7 +33,7 @@ pub fn load_ignore_file(project_root: &Path) -> IgnoreFile {
         Ok(parsed) => {
             if parsed.version != 1 {
                 logger::warn(&format!(
-                    "{FILENAME} has unexpected version {} — treating as empty",
+                    "{display_name} has unexpected version {} — treating as empty",
                     parsed.version
                 ));
                 return IgnoreFile::default();
@@ -33,7 +42,7 @@ pub fn load_ignore_file(project_root: &Path) -> IgnoreFile {
         }
         Err(e) => {
             logger::warn(&format!(
-                "Failed to parse {FILENAME}: {e} — treating as empty"
+                "Failed to parse {display_name}: {e} — treating as empty"
             ));
             IgnoreFile::default()
         }
@@ -43,7 +52,9 @@ pub fn load_ignore_file(project_root: &Path) -> IgnoreFile {
 pub fn save_ignore_file(project_root: &Path, ignore_file: &IgnoreFile) {
     let file_path = project_root.join(FILENAME);
     let json = serde_json::to_string_pretty(ignore_file).unwrap_or_default();
-    let _ = fs::write(file_path, format!("{json}\n"));
+    if let Err(e) = fs::write(&file_path, format!("{json}\n")) {
+        logger::warn(&format!("Failed to write {FILENAME}: {e}"));
+    }
 }
 
 pub fn add_exclusion(ignore_file: &IgnoreFile, exclusion: Exclusion) -> IgnoreFile {
