@@ -18,26 +18,25 @@ export async function detectModel(client: Ollama): Promise<ModelInfo> {
   const response = await client.list();
   const names = response.models.map((m) => m.name);
 
-  // Prefer 7B (default tag), fall back to 137M
-  const has7b = names.some(
-    (n) => n === 'nomic-embed-code:latest' || n === 'nomic-embed-code',
-  );
-  const has137m = names.some((n) => n.startsWith('nomic-embed-code:137m'));
+  // Preference order: nomic-embed-code 7B > nomic-embed-code 137M > nomic-embed-text
+  const candidates: Array<{ match: (n: string) => boolean; resolve: (n: string) => string; tier: ModelInfo['tier'] }> = [
+    { match: (n) => n === 'nomic-embed-code:latest' || n === 'nomic-embed-code', resolve: () => 'nomic-embed-code', tier: '7b' },
+    { match: (n) => n.startsWith('nomic-embed-code:137m'), resolve: (n) => n, tier: '137m' },
+    { match: (n) => n === 'nomic-embed-text:latest' || n === 'nomic-embed-text', resolve: () => 'nomic-embed-text', tier: '7b' },
+    { match: (n) => n.startsWith('nomic-embed-text:'), resolve: (n) => n, tier: '137m' },
+  ];
 
-  if (has7b) {
-    const modelName = 'nomic-embed-code';
-    const dimensions = await detectDimensions(client, modelName);
-    return { name: modelName, dimensions, tier: '7b' };
-  }
-
-  if (has137m) {
-    const modelName = names.find((n) => n.startsWith('nomic-embed-code:137m'))!;
-    const dimensions = await detectDimensions(client, modelName);
-    return { name: modelName, dimensions, tier: '137m' };
+  for (const candidate of candidates) {
+    const found = names.find(candidate.match);
+    if (found) {
+      const modelName = candidate.resolve(found);
+      const dimensions = await detectDimensions(client, modelName);
+      return { name: modelName, dimensions, tier: candidate.tier };
+    }
   }
 
   throw new Error(
-    'No nomic-embed-code model found in Ollama. Run: ollama pull nomic-embed-code',
+    'No nomic embedding model found in Ollama. Run: ollama pull nomic-embed-text',
   );
 }
 

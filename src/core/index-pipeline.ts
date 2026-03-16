@@ -85,16 +85,17 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
       deleteFunctionsForFile(db, fp);
     }
 
+    // Upsert tracked file first (foreign key: functions → tracked_files)
+    const source = await fs.readFile(fp, 'utf-8');
+    const stat = await fs.stat(fp);
+    upsertTrackedFile(db, fp, contentHash(source), stat.mtimeMs);
+
     const parsed = await parseFile(fp);
 
     if (parsed.chunks.length > 0) {
       upsertFunctions(db, parsed.chunks);
       totalChunks += parsed.chunks.length;
     }
-
-    const source = await fs.readFile(fp, 'utf-8');
-    const stat = await fs.stat(fp);
-    upsertTrackedFile(db, fp, contentHash(source), stat.mtimeMs);
   }
 
   log(`Parsed ${totalChunks} functions from ${filesToProcess.length} files`);
