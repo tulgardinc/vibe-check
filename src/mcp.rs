@@ -9,6 +9,38 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+// --- Indexing state shared across tool calls ---
+
+#[derive(Clone)]
+enum IndexingStatus {
+    Idle,
+    Running {
+        embedded: Arc<std::sync::atomic::AtomicUsize>,
+        total: usize,
+    },
+    Done(String),
+    Failed(String),
+}
+
+struct IndexingState {
+    status: IndexingStatus,
+    cancel: Arc<AtomicBool>,
+}
+
+impl IndexingState {
+    fn new() -> Self {
+        Self {
+            status: IndexingStatus::Idle,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+// --- JSON-RPC types ---
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -65,6 +97,8 @@ fn is_false(v: &bool) -> bool {
 fn main() {
     eprintln!("vibecheck MCP server running on stdio");
 
+    let state = Arc::new(Mutex::new(IndexingState::new()));
+
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -83,7 +117,7 @@ fn main() {
             Err(_) => continue,
         };
 
-        let response = handle_request(&request);
+        let response = handle_request(&request, &state);
 
         if let Some(resp) = response {
             let json = serde_json::to_string(&resp).unwrap_or_default();
@@ -93,8 +127,8 @@ fn main() {
     }
 }
 
-fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
-    let id = req.id.clone()?; // notifications have no id
+fn handle_request(req: &JsonRpcRequest, state: &Arc<Mutex<IndexingState>>) -> Option<JsonRpcResponse> {
+    let id = req.id.clone()?;
 
     let result = match req.method.as_str() {
         "initialize" => Ok(serde_json::json!({
@@ -111,7 +145,7 @@ fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         "tools/list" => Ok(serde_json::json!({
             "tools": get_tool_list()
         })),
-        "tools/call" => handle_tool_call(&req.params),
+        "tools/call" => handle_tool_call(&req.params, state),
         _ => Err(format!("Unknown method: {}", req.method)),
     };
 
@@ -151,13 +185,21 @@ fn get_tool_list() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "vibecheck_index".into(),
-            description: "Build or update the semantic index".into(),
+            description: "Build or update the semantic index. Runs in the background — call again to check progress. Parsing is fast; embedding takes ~2s per function. Already-embedded functions are not re-embedded unless force is true.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Directory to index" },
                     "force": { "type": "boolean", "default": false }
                 }
+            }),
+        },
+        ToolInfo {
+            name: "vibecheck_index_stop".into(),
+            description: "Stop a running index operation. Progress is saved — already-embedded functions are kept. Call vibecheck_index again to resume.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         },
         ToolInfo {
@@ -200,7 +242,7 @@ fn get_tool_list() -> Vec<ToolInfo> {
     ]
 }
 
-fn handle_tool_call(params: &Value) -> Result<Value, String> {
+fn handle_tool_call(params: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<Value, String> {
     let tool_name = params
         .get("name")
         .and_then(|v| v.as_str())
@@ -212,7 +254,8 @@ fn handle_tool_call(params: &Value) -> Result<Value, String> {
 
     let result = match tool_name {
         "vibecheck_query" => handle_query(&args),
-        "vibecheck_index" => handle_index(&args),
+        "vibecheck_index" => handle_index(&args, state),
+        "vibecheck_index_stop" => handle_index_stop(state),
         "vibecheck_scan" => handle_scan(&args),
         "vibecheck_status" => handle_status(),
         "vibecheck_add_exclusion" => handle_add_exclusion(&args),
@@ -272,33 +315,116 @@ fn handle_query(args: &Value) -> Result<String, String> {
     serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
 }
 
-fn handle_index(args: &Value) -> Result<String, String> {
-    let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<String, String> {
+    // Check current status
+    let current = {
+        let s = state.lock().unwrap();
+        s.status.clone()
+    };
 
-    let result = run_index(IndexOptions {
-        path,
-        db_path: None,
-        force,
-        model: None,
-        ollama_host: None,
-        on_embed_start: None,
-        on_embed_progress: None,
-        on_embed_done: None,
-    })
-    .map_err(|e| e.to_string())?;
+    match current {
+        IndexingStatus::Running { embedded, total } => {
+            let done = embedded.load(Ordering::Relaxed);
+            Ok(format!(
+                "Indexing in progress: {done}/{total} functions embedded. Call again to check progress."
+            ))
+        }
+        IndexingStatus::Done(ref msg) => {
+            let msg = msg.clone();
+            // Reset to idle so next call starts fresh
+            state.lock().unwrap().status = IndexingStatus::Idle;
+            Ok(msg)
+        }
+        IndexingStatus::Failed(ref msg) => {
+            let msg = msg.clone();
+            state.lock().unwrap().status = IndexingStatus::Idle;
+            Err(msg)
+        }
+        IndexingStatus::Idle => {
+            // Start indexing in background
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    Ok(format!(
-        "Indexing complete. {} functions from {} files ({} added, {} modified, {} deleted). Model: {} ({}, {}d).",
-        result.functions_indexed,
-        result.files_scanned,
-        result.added,
-        result.modified,
-        result.deleted,
-        result.model,
-        result.tier,
-        result.dimensions
-    ))
+            let cancel = Arc::new(AtomicBool::new(false));
+            let embedded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+            let cancel_clone = Arc::clone(&cancel);
+            let embedded_clone = Arc::clone(&embedded);
+            let state_clone = Arc::clone(state);
+            let embedded_for_start = Arc::clone(&embedded);
+
+            // Store state before spawning
+            {
+                let mut s = state.lock().unwrap();
+                s.cancel = Arc::clone(&cancel);
+                // status will be set to Running once we know the total
+                s.status = IndexingStatus::Running {
+                    embedded: Arc::clone(&embedded),
+                    total: 0,
+                };
+            }
+
+            let state_for_total = Arc::clone(state);
+
+            thread::spawn(move || {
+                let result = run_index(IndexOptions {
+                    path,
+                    db_path: None,
+                    force,
+                    model: None,
+                    ollama_host: None,
+                    on_embed_start: Some(Box::new(move |total| {
+                        let mut s = state_for_total.lock().unwrap();
+                        s.status = IndexingStatus::Running {
+                            embedded: Arc::clone(&embedded_for_start),
+                            total,
+                        };
+                    })),
+                    on_embed_progress: Some(Box::new(move |n| {
+                        embedded_clone.fetch_add(n, Ordering::Relaxed);
+                    })),
+                    on_embed_done: None,
+                    cancel: Some(cancel_clone),
+                });
+
+                let mut s = state_clone.lock().unwrap();
+                match result {
+                    Ok(r) => {
+                        s.status = IndexingStatus::Done(format!(
+                            "Indexing complete. {} functions from {} files ({} added, {} modified, {} deleted). Model: {} ({}, {}d).",
+                            r.functions_indexed, r.files_scanned,
+                            r.added, r.modified, r.deleted,
+                            r.model, r.tier, r.dimensions
+                        ));
+                    }
+                    Err(e) => {
+                        let cancelled = s.cancel.load(Ordering::Relaxed);
+                        if cancelled {
+                            s.status = IndexingStatus::Done(
+                                "Indexing stopped. Progress has been saved — call vibecheck_index to resume.".into()
+                            );
+                        } else {
+                            s.status = IndexingStatus::Failed(e.to_string());
+                        }
+                    }
+                }
+                s.cancel = Arc::new(AtomicBool::new(false));
+            });
+
+            Ok("Indexing started. Call vibecheck_index again to check progress.".into())
+        }
+    }
+}
+
+fn handle_index_stop(state: &Arc<Mutex<IndexingState>>) -> Result<String, String> {
+    let s = state.lock().unwrap();
+    match s.status {
+        IndexingStatus::Running { .. } => {
+            s.cancel.store(true, Ordering::Relaxed);
+            Ok("Stop requested. Indexing will stop after the current embedding completes. Progress is saved — call vibecheck_index to resume.".into())
+        }
+        _ => Ok("No indexing operation is running.".into()),
+    }
 }
 
 fn handle_scan(args: &Value) -> Result<String, String> {

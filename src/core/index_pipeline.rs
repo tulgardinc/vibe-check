@@ -17,6 +17,8 @@ use crate::util::logger;
 use rayon::prelude::*;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 pub struct IndexOptions {
@@ -31,6 +33,8 @@ pub struct IndexOptions {
     pub on_embed_progress: Option<Box<dyn Fn(usize)>>,
     /// Called when embedding finishes
     pub on_embed_done: Option<Box<dyn Fn()>>,
+    /// Set to true to cancel the embedding loop
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
@@ -175,6 +179,13 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, CodeuseError> {
         }
 
         for func in &unembedded {
+            if let Some(ref cancel) = options.cancel {
+                if cancel.load(Ordering::Relaxed) {
+                    logger::info("Indexing cancelled. Progress has been saved.");
+                    break;
+                }
+            }
+
             let embedding = embedder.embed_query(&func.source_text)?;
             update_embedding(&conn, &func.id, &embedding)?;
 

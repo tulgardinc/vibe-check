@@ -193,6 +193,7 @@ fn run_index_cmd(
                 bar.finish_and_clear();
             }
         })),
+        cancel: None,
     })?;
 
     logger::success(&format!(
