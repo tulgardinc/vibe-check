@@ -2,7 +2,8 @@ export interface Candidate {
   name: string;
   path: string;
   line: number;
-  similarity: number;
+  /** Cosine distance — lower means more similar (0 = identical). */
+  distance: number;
   detectionMethod: 'embedding' | 'jscpd' | 'combined';
   source: string;
   signatureHash: string;
@@ -16,12 +17,12 @@ export interface QueryFunction {
 }
 
 export interface QueryResult {
-  query_functions: QueryFunction[];
+  queryFunctions: QueryFunction[];
   warnings: string[];
   meta: {
     model: string;
-    indexed_functions: number;
-    query_functions: number;
-    elapsed_ms: number;
+    indexedFunctions: number;
+    queryFunctions: number;
+    elapsedMs: number;
   };
 }

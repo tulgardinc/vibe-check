@@ -1,44 +1,42 @@
 import type { Ollama } from 'ollama';
-import type { FunctionChunk } from '../parser/types.js';
-import type { EmbeddingResult } from './types.js';
+import type { Embedder } from './types.js';
 
 const BATCH_SIZE = 32;
 
-export async function embedChunks(
-  client: Ollama,
-  modelName: string,
-  chunks: FunctionChunk[],
-  onProgress?: (done: number, total: number) => void,
-): Promise<EmbeddingResult[]> {
-  const results: EmbeddingResult[] = [];
+/** Ollama-backed implementation of the Embedder interface. */
+export class OllamaEmbedder implements Embedder {
+  constructor(
+    private client: Ollama,
+    public readonly modelName: string,
+    public readonly dimensions: number,
+    public readonly tier: string,
+  ) {}
 
-  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-    const batch = chunks.slice(i, i + BATCH_SIZE);
-    const inputs = batch.map((c) => c.sourceText);
+  async embedBatch(
+    inputs: string[],
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<Float32Array[]> {
+    const results: Float32Array[] = [];
 
-    const response = await client.embed({ model: modelName, input: inputs });
+    for (let i = 0; i < inputs.length; i += BATCH_SIZE) {
+      const batch = inputs.slice(i, i + BATCH_SIZE);
+      const response = await this.client.embed({ model: this.modelName, input: batch });
 
-    for (let j = 0; j < batch.length; j++) {
-      results.push({
-        functionId: batch[j].id,
-        embedding: new Float32Array(response.embeddings[j]),
-      });
+      for (const embedding of response.embeddings) {
+        results.push(new Float32Array(embedding));
+      }
+
+      onProgress?.(Math.min(i + BATCH_SIZE, inputs.length), inputs.length);
     }
 
-    onProgress?.(Math.min(i + BATCH_SIZE, chunks.length), chunks.length);
+    return results;
   }
 
-  return results;
-}
-
-export async function embedQuery(
-  client: Ollama,
-  modelName: string,
-  source: string,
-): Promise<Float32Array> {
-  const response = await client.embed({
-    model: modelName,
-    input: `search_query: ${source}`,
-  });
-  return new Float32Array(response.embeddings[0]);
+  async embedQuery(input: string): Promise<Float32Array> {
+    const response = await this.client.embed({
+      model: this.modelName,
+      input: `search_query: ${input}`,
+    });
+    return new Float32Array(response.embeddings[0]);
+  }
 }

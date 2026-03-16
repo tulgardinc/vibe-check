@@ -48,10 +48,9 @@ export async function findTypeScriptFiles(
     if (entry.name.endsWith('.test.ts')) continue;
     if (entry.name.endsWith('.spec.ts')) continue;
 
-    const relativePath = path.relative(
-      rootDir,
-      path.join(entry.parentPath ?? (entry as unknown as { path: string }).path, entry.name),
-    );
+    // parentPath was added in Node 20.12; fall back to the older `path` property
+    const parentDir: string = entry.parentPath ?? (entry as unknown as { path: string }).path;
+    const relativePath = path.relative(rootDir, path.join(parentDir, entry.name));
 
     const parts = relativePath.split(path.sep);
     if (parts.some((p) => excludes.includes(p))) continue;

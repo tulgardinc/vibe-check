@@ -19,10 +19,3 @@ export interface FileRecord {
   mtimeMs: number;
   indexedAt: string;
 }
-
-export interface IndexMeta {
-  modelName: string | null;
-  modelDimensions: number | null;
-  createdAt: string | null;
-  lastIndexedAt: string | null;
-}

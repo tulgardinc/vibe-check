@@ -1,37 +1,58 @@
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { runQuery } from './core/query-pipeline.js';
 import { runIndex } from './core/index-pipeline.js';
+import { runScan } from './core/scan-pipeline.js';
 import { runStatus } from './core/status-pipeline.js';
 import { loadIgnoreFile, addExclusion, saveIgnoreFile } from './ignore/ignore-file.js';
 import { findProjectRoot } from './util/config.js';
 
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json') as { version: string };
+
 const server = new McpServer({
   name: 'codeuse',
-  version: '0.1.0',
+  version,
 });
+
+function mcpError(e: unknown): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+  return {
+    content: [{ type: 'text', text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
+    isError: true,
+  };
+}
 
 // Tool 1: Query for similar functions
 server.tool(
   'codeuse_query',
-  'Find existing functions in the codebase that are semantically similar to provided TypeScript code. Use this before writing new utility functions to check if equivalent implementations already exist.',
+  'Find existing functions in the codebase that are semantically similar to TypeScript code. Pass either a file path or source code. Prefer file path when checking code you already wrote to disk — it avoids sending the full source in the tool call.',
   {
-    source: z.string().describe('TypeScript source code to check for existing similar functions'),
+    file: z.string().optional().describe('Path to a TypeScript file to check (preferred over source — saves tokens)'),
+    source: z.string().optional().describe('TypeScript source code to check (use when code is not yet on disk)'),
     topK: z.number().optional().default(5).describe('Number of candidate matches per function (default: 5)'),
     threshold: z.number().optional().default(0.3).describe('Cosine distance threshold — lower means more similar (default: 0.3)'),
   },
-  async ({ source, topK, threshold }) => {
+  async ({ file, source, topK, threshold }) => {
     try {
-      const result = await runQuery({ source, topK, threshold });
+      let resolvedSource: string;
+      let fileName: string | undefined;
+      if (file) {
+        resolvedSource = fs.readFileSync(file, 'utf-8');
+        fileName = file;
+      } else if (source) {
+        resolvedSource = source;
+      } else {
+        return mcpError(new Error('Provide either "file" or "source"'));
+      }
+      const result = await runQuery({ source: resolvedSource, fileName, topK, threshold });
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (e) {
-      return {
-        content: [{ type: 'text', text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-        isError: true,
-      };
+      return mcpError(e);
     }
   },
 );
@@ -60,10 +81,7 @@ server.tool(
         }],
       };
     } catch (e) {
-      return {
-        content: [{ type: 'text', text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-        isError: true,
-      };
+      return mcpError(e);
     }
   },
 );
@@ -96,15 +114,32 @@ server.tool(
         }],
       };
     } catch (e) {
-      return {
-        content: [{ type: 'text', text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-        isError: true,
-      };
+      return mcpError(e);
     }
   },
 );
 
-// Tool 4: Add a false-positive exclusion
+// Tool 4: Scan entire codebase for similar function pairs
+server.tool(
+  'codeuse_scan',
+  'Scan all indexed functions against each other to find duplicate or similar function pairs across the codebase. Returns deduplicated pairs ranked by similarity.',
+  {
+    topN: z.number().optional().default(50).describe('Maximum number of pairs to return (default: 50)'),
+    threshold: z.number().optional().default(0.25).describe('Cosine distance threshold — lower means stricter (default: 0.25)'),
+  },
+  async ({ topN, threshold }) => {
+    try {
+      const result = runScan({ topN, threshold });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (e) {
+      return mcpError(e);
+    }
+  },
+);
+
+// Tool 5: Add a false-positive exclusion
 server.tool(
   'codeuse_add_exclusion',
   'Mark two functions as NOT duplicates so they are no longer suggested as matches. Use this when a query result is a false positive.',
@@ -140,10 +175,7 @@ server.tool(
         }],
       };
     } catch (e) {
-      return {
-        content: [{ type: 'text', text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-        isError: true,
-      };
+      return mcpError(e);
     }
   },
 );

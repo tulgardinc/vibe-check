@@ -8,46 +8,10 @@ import {
   updateEmbedding,
   queryKNN,
   getFunctionsWithoutEmbeddings,
+  countFunctions,
 } from '../../src/store/index-store.js';
+import { openDatabase } from '../../src/store/db.js';
 import type { FunctionChunk } from '../../src/parser/types.js';
-
-function createTestDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  sqliteVec.load(db);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS index_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS tracked_files (
-      file_path TEXT PRIMARY KEY,
-      content_hash TEXT NOT NULL,
-      mtime_ms INTEGER NOT NULL,
-      indexed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS functions (
-      id TEXT PRIMARY KEY,
-      file_path TEXT NOT NULL,
-      function_name TEXT NOT NULL,
-      source_text TEXT NOT NULL,
-      start_line INTEGER NOT NULL,
-      end_line INTEGER NOT NULL,
-      params_json TEXT NOT NULL,
-      return_type TEXT,
-      is_exported INTEGER NOT NULL,
-      signature_hash TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      embedding BLOB,
-      FOREIGN KEY (file_path) REFERENCES tracked_files(file_path) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_functions_file ON functions(file_path);
-    CREATE INDEX IF NOT EXISTS idx_functions_sig ON functions(signature_hash);
-  `);
-
-  return db;
-}
 
 const sampleChunk: FunctionChunk = {
   id: 'test.ts:foo:1',
@@ -66,7 +30,7 @@ describe('index-store', () => {
   let db: Database.Database;
 
   beforeEach(() => {
-    db = createTestDb();
+    db = openDatabase(':memory:');
     // Insert tracked file first (foreign key)
     db.prepare(
       'INSERT INTO tracked_files (file_path, content_hash, mtime_ms, indexed_at) VALUES (?, ?, ?, ?)',
@@ -95,6 +59,12 @@ describe('index-store', () => {
     upsertFunctions(db, [sampleChunk]);
     const unembedded = getFunctionsWithoutEmbeddings(db);
     expect(unembedded).toHaveLength(1);
+  });
+
+  it('counts functions', () => {
+    expect(countFunctions(db)).toBe(0);
+    upsertFunctions(db, [sampleChunk]);
+    expect(countFunctions(db)).toBe(1);
   });
 
   it('updates embedding and queries KNN', () => {

@@ -3,6 +3,22 @@ import { contentHash } from '../util/hash.js';
 import type { FunctionChunk } from '../parser/types.js';
 import type { StoredFunction } from './types.js';
 
+/** Expected shape of a row from the functions table. */
+interface FunctionRow {
+  id: string;
+  file_path: string;
+  function_name: string;
+  source_text: string;
+  start_line: number;
+  end_line: number;
+  params_json: string;
+  return_type: string | null;
+  is_exported: number;
+  signature_hash: string;
+  content_hash: string;
+  embedding: Buffer | null;
+}
+
 export function upsertFunctions(
   db: Database.Database,
   chunks: FunctionChunk[],
@@ -48,19 +64,24 @@ export function getFunctionBySignatureHash(
 ): StoredFunction | null {
   const row = db
     .prepare('SELECT * FROM functions WHERE signature_hash = ? LIMIT 1')
-    .get(hash);
+    .get(hash) as FunctionRow | undefined;
   return row ? mapRow(row) : null;
 }
 
 export function getAllFunctions(db: Database.Database): StoredFunction[] {
-  const rows = db.prepare('SELECT * FROM functions').all();
+  const rows = db.prepare('SELECT * FROM functions').all() as FunctionRow[];
   return rows.map(mapRow);
+}
+
+export function countFunctions(db: Database.Database): number {
+  const row = db.prepare('SELECT COUNT(*) AS count FROM functions').get() as { count: number };
+  return row.count;
 }
 
 export function getFunctionsWithoutEmbeddings(
   db: Database.Database,
 ): StoredFunction[] {
-  const rows = db.prepare('SELECT * FROM functions WHERE embedding IS NULL').all();
+  const rows = db.prepare('SELECT * FROM functions WHERE embedding IS NULL').all() as FunctionRow[];
   return rows.map(mapRow);
 }
 
@@ -90,27 +111,26 @@ export function queryKNN(
        ORDER BY distance ASC
        LIMIT ?`,
     )
-    .all(queryBuf, topK) as (Record<string, unknown> & { distance: number })[];
+    .all(queryBuf, topK) as (FunctionRow & { distance: number })[];
 
   return rows
     .filter((r) => r.distance <= threshold)
     .map((r) => ({ ...mapRow(r), distance: r.distance }));
 }
 
-function mapRow(row: unknown): StoredFunction {
-  const r = row as Record<string, unknown>;
+function mapRow(row: FunctionRow): StoredFunction {
   return {
-    id: r.id as string,
-    filePath: r.file_path as string,
-    functionName: r.function_name as string,
-    sourceText: r.source_text as string,
-    startLine: r.start_line as number,
-    endLine: r.end_line as number,
-    paramsJson: r.params_json as string,
-    returnType: r.return_type as string | null,
-    isExported: (r.is_exported as number) === 1,
-    signatureHash: r.signature_hash as string,
-    contentHash: r.content_hash as string,
-    embedding: r.embedding as Buffer | null,
+    id: row.id,
+    filePath: row.file_path,
+    functionName: row.function_name,
+    sourceText: row.source_text,
+    startLine: row.start_line,
+    endLine: row.end_line,
+    paramsJson: row.params_json,
+    returnType: row.return_type,
+    isExported: row.is_exported === 1,
+    signatureHash: row.signature_hash,
+    contentHash: row.content_hash,
+    embedding: row.embedding,
   };
 }

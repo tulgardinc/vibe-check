@@ -7,7 +7,7 @@ export function formatJson(result: QueryResult): string {
 export function formatHuman(result: QueryResult): string {
   const lines: string[] = [];
 
-  for (const qf of result.query_functions) {
+  for (const qf of result.queryFunctions) {
     lines.push(`\n${qf.name} (${qf.file}:${qf.line})`);
 
     if (qf.candidates.length === 0) {
@@ -16,7 +16,7 @@ export function formatHuman(result: QueryResult): string {
     }
 
     for (const c of qf.candidates) {
-      const similarity = (1 - c.similarity).toFixed(2);
+      const similarity = (1 - c.distance).toFixed(2);
       lines.push(
         `  ${c.name} (${c.path}:${c.line}) — similarity: ${similarity} [${c.detectionMethod}]`,
       );
@@ -31,7 +31,7 @@ export function formatHuman(result: QueryResult): string {
   }
 
   lines.push(
-    `\n${result.meta.query_functions} functions checked against ${result.meta.indexed_functions} indexed (${result.meta.elapsed_ms}ms)`,
+    `\n${result.meta.queryFunctions} functions checked against ${result.meta.indexedFunctions} indexed (${result.meta.elapsedMs}ms)`,
   );
 
   return lines.join('\n');

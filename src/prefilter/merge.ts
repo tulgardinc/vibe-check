@@ -20,7 +20,7 @@ export function mergeResults(
         name: m.matchedFunction,
         path: m.matchedFilePath,
         line: m.matchedStartLine,
-        similarity: 1 - m.confidence, // Convert confidence to distance (lower = more similar)
+        distance: 1 - m.confidence, // Convert confidence to distance (lower = more similar)
         detectionMethod: 'jscpd',
         source: '',
         signatureHash: '',
@@ -34,9 +34,9 @@ export function mergeResults(
     const existing = seen.get(key);
     if (existing) {
       existing.detectionMethod = 'combined';
-      // Keep the better (lower) similarity score
-      existing.similarity = Math.min(existing.similarity, c.similarity);
-      // Fill in source if missing
+      // Keep the better (lower) distance score
+      existing.distance = Math.min(existing.distance, c.distance);
+      // Fill in source/signatureHash if the prefilter entry lacked them
       if (!existing.source && c.source) existing.source = c.source;
       if (!existing.signatureHash && c.signatureHash)
         existing.signatureHash = c.signatureHash;
@@ -45,5 +45,5 @@ export function mergeResults(
     }
   }
 
-  return Array.from(seen.values()).sort((a, b) => a.similarity - b.similarity);
+  return Array.from(seen.values()).sort((a, b) => a.distance - b.distance);
 }

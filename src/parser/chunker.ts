@@ -16,6 +16,7 @@ const FUNCTION_NODE_TYPES = new Set([
   'function_expression',
 ]);
 
+/** Minimum line count for a function to be indexed. */
 const MIN_LINES = 3;
 
 export async function parseFile(filePath: string): Promise<ParsedFile> {
@@ -28,7 +29,7 @@ export function parseSource(source: string, filePath: string): ParsedFile {
   const chunks: FunctionChunk[] = [];
   const parseErrors: string[] = [];
 
-  walkNode(tree.rootNode, filePath, source, chunks, parseErrors, false);
+  walkNode(tree.rootNode, filePath, chunks, parseErrors, false);
 
   return { filePath, chunks, parseErrors };
 }
@@ -36,7 +37,6 @@ export function parseSource(source: string, filePath: string): ParsedFile {
 function walkNode(
   node: Parser.SyntaxNode,
   filePath: string,
-  source: string,
   chunks: FunctionChunk[],
   errors: string[],
   parentExported: boolean,
@@ -52,9 +52,10 @@ function walkNode(
     node.type === 'export_statement' || node.type === 'export_default_declaration';
 
   if (FUNCTION_NODE_TYPES.has(node.type)) {
-    const chunk = extractChunk(node, filePath, source, parentExported);
-    if (chunk) {
-      chunks.push(chunk);
+    const name = extractFunctionName(node);
+    if (name) {
+      const chunk = buildChunk(name, node, node, filePath, parentExported);
+      if (chunk) chunks.push(chunk);
     }
     // Don't recurse into function bodies for nested functions
     return;
@@ -69,20 +70,10 @@ function walkNode(
           value &&
           (value.type === 'arrow_function' || value.type === 'function_expression')
         ) {
-          const nameNode = declarator.childForFieldName('name');
-          const name = nameNode?.text ?? null;
+          const name = declarator.childForFieldName('name')?.text ?? null;
           if (name) {
-            const chunk = extractChunkFromAssignment(
-              name,
-              value,
-              node,
-              filePath,
-              source,
-              parentExported,
-            );
-            if (chunk) {
-              chunks.push(chunk);
-            }
+            const chunk = buildChunk(name, value, node, filePath, parentExported);
+            if (chunk) chunks.push(chunk);
           }
         }
       }
@@ -91,73 +82,41 @@ function walkNode(
   }
 
   for (const child of node.namedChildren) {
-    walkNode(child, filePath, source, chunks, errors, isExportStatement || parentExported);
+    walkNode(child, filePath, chunks, errors, isExportStatement || parentExported);
   }
 }
 
-function extractChunk(
-  node: Parser.SyntaxNode,
-  filePath: string,
-  source: string,
-  isExported: boolean,
-): FunctionChunk | null {
-  const name = extractFunctionName(node);
-  if (!name) return null; // Skip anonymous functions
-
-  const lineCount = node.endPosition.row - node.startPosition.row + 1;
-  if (lineCount < MIN_LINES) return null;
-
-  const params = extractParams(node);
-  const returnType = extractReturnType(node);
-  const sourceText = node.text;
-  const startLine = node.startPosition.row + 1;
-  const endLine = node.endPosition.row + 1;
-  const signatureHash = computeSignatureHash(name, params, returnType);
-
-  return {
-    id: `${filePath}:${name}:${startLine}`,
-    filePath,
-    functionName: name,
-    sourceText,
-    startLine,
-    endLine,
-    params,
-    returnType,
-    isExported,
-    signatureHash,
-  };
-}
-
-function extractChunkFromAssignment(
+/**
+ * Build a FunctionChunk from a function node.
+ * @param funcNode — the arrow_function/function_declaration node (used for params/return type)
+ * @param spanNode — the node whose text span defines the chunk boundaries (may differ for assignments)
+ */
+function buildChunk(
   name: string,
-  valueNode: Parser.SyntaxNode,
-  declarationNode: Parser.SyntaxNode,
+  funcNode: Parser.SyntaxNode,
+  spanNode: Parser.SyntaxNode,
   filePath: string,
-  source: string,
   isExported: boolean,
 ): FunctionChunk | null {
-  const lineCount =
-    declarationNode.endPosition.row - declarationNode.startPosition.row + 1;
+  const lineCount = spanNode.endPosition.row - spanNode.startPosition.row + 1;
   if (lineCount < MIN_LINES) return null;
 
-  const params = extractParams(valueNode);
-  const returnType = extractReturnType(valueNode);
-  const sourceText = declarationNode.text;
-  const startLine = declarationNode.startPosition.row + 1;
-  const endLine = declarationNode.endPosition.row + 1;
-  const signatureHash = computeSignatureHash(name, params, returnType);
+  const params = extractParams(funcNode);
+  const returnType = extractReturnType(funcNode);
+  const startLine = spanNode.startPosition.row + 1;
+  const endLine = spanNode.endPosition.row + 1;
 
   return {
     id: `${filePath}:${name}:${startLine}`,
     filePath,
     functionName: name,
-    sourceText,
+    sourceText: spanNode.text,
     startLine,
     endLine,
     params,
     returnType,
     isExported,
-    signatureHash,
+    signatureHash: computeSignatureHash(name, params, returnType),
   };
 }
 
@@ -183,23 +142,16 @@ function extractParams(node: Parser.SyntaxNode): ParamInfo[] {
   for (const child of paramsNode.namedChildren) {
     if (
       child.type === 'required_parameter' ||
-      child.type === 'optional_parameter'
+      child.type === 'optional_parameter' ||
+      child.type === 'rest_parameter'
     ) {
-      const paramName = child.childForFieldName('pattern')?.text
+      const rawName = child.childForFieldName('pattern')?.text
         ?? child.childForFieldName('name')?.text
         ?? child.text;
+      const paramName = child.type === 'rest_parameter' ? `...${rawName}` : rawName;
       const typeAnnotation = child.childForFieldName('type');
       params.push({
         name: paramName,
-        type: stripTypePrefix(typeAnnotation?.text ?? null),
-      });
-    } else if (child.type === 'rest_parameter') {
-      const paramName = child.childForFieldName('pattern')?.text
-        ?? child.childForFieldName('name')?.text
-        ?? child.text;
-      const typeAnnotation = child.childForFieldName('type');
-      params.push({
-        name: `...${paramName}`,
         type: stripTypePrefix(typeAnnotation?.text ?? null),
       });
     }

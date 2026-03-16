@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { Ollama } from 'ollama';
-import type { ModelInfo } from './types.js';
+import { OllamaEmbedder } from './embed.js';
+import type { Embedder, ModelInfo } from './types.js';
 
 export function createClient(host?: string): Ollama {
   return new Ollama({ host: host ?? 'http://localhost:11434' });
@@ -88,14 +89,13 @@ async function tryStartOllama(): Promise<boolean> {
 }
 
 /**
- * Run a full preflight check and return a human-readable diagnostic.
- * Used by the CLI to give first-time users clear setup instructions.
+ * Run a full preflight check: verify Ollama is reachable (auto-starting if
+ * needed), detect the embedding model, and return a ready-to-use Embedder.
  */
-export async function preflight(client: Ollama): Promise<{ ok: boolean; message: string }> {
+export async function preflight(client: Ollama): Promise<{ ok: true; embedder: Embedder; message: string } | { ok: false; message: string }> {
   let healthy = await checkHealth(client);
 
   if (!healthy) {
-    // Try to start Ollama if the binary exists
     const started = await tryStartOllama();
     if (started) {
       healthy = await checkHealth(client);
@@ -119,8 +119,10 @@ export async function preflight(client: Ollama): Promise<{ ok: boolean; message:
 
   try {
     const model = await detectModel(client);
+    const embedder = new OllamaEmbedder(client, model.name, model.dimensions, model.tier);
     return {
       ok: true,
+      embedder,
       message: `Ollama is running. Using ${model.name} (${model.tier}, ${model.dimensions}d).`,
     };
   } catch (e) {

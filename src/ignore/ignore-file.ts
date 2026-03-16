@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { warn } from '../util/logger.js';
 import type { Exclusion, IgnoreFile } from './types.js';
 
 const FILENAME = '.codereuse-ignore.json';
@@ -9,8 +10,18 @@ export function loadIgnoreFile(projectRoot: string): IgnoreFile {
   if (!fs.existsSync(filePath)) {
     return { version: 1, exclusions: [] };
   }
-  const content = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(content) as IgnoreFile;
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.exclusions)) {
+      warn(`${FILENAME} has unexpected format — treating as empty`);
+      return { version: 1, exclusions: [] };
+    }
+    return parsed as unknown as IgnoreFile;
+  } catch (e) {
+    warn(`Failed to parse ${FILENAME}: ${e instanceof Error ? e.message : String(e)} — treating as empty`);
+    return { version: 1, exclusions: [] };
+  }
 }
 
 export function saveIgnoreFile(projectRoot: string, ignoreFile: IgnoreFile): void {
@@ -25,10 +36,10 @@ export function addExclusion(
   // Deduplicate: check if this pair already exists (in either direction)
   const exists = ignoreFile.exclusions.some(
     (e) =>
-      (matchesSide(e.pair.a, exclusion.pair.a) &&
-        matchesSide(e.pair.b, exclusion.pair.b)) ||
-      (matchesSide(e.pair.a, exclusion.pair.b) &&
-        matchesSide(e.pair.b, exclusion.pair.a)),
+      (pairSideMatches(e.pair.a, exclusion.pair.a) &&
+        pairSideMatches(e.pair.b, exclusion.pair.b)) ||
+      (pairSideMatches(e.pair.a, exclusion.pair.b) &&
+        pairSideMatches(e.pair.b, exclusion.pair.a)),
   );
 
   if (exists) return ignoreFile;
@@ -63,7 +74,7 @@ export function applyExclusions(
   );
 }
 
-function matchesSide(
+function pairSideMatches(
   a: { signatureHash: string },
   b: { signatureHash: string },
 ): boolean {

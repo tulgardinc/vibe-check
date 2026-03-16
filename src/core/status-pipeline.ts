@@ -44,33 +44,35 @@ export function runStatus(options?: {
   }
 
   const db = openDatabase(dbPath);
-  const functions = getAllFunctions(db);
-  const trackedFiles = getTrackedFiles(db);
-  const ignoreFile = loadIgnoreFile(projectRoot);
-  const staleWarnings = detectStaleExclusions(db, ignoreFile);
+  try {
+    const functions = getAllFunctions(db);
+    const trackedFiles = getTrackedFiles(db);
+    const ignoreFile = loadIgnoreFile(projectRoot);
+    const staleWarnings = detectStaleExclusions(db, ignoreFile);
 
-  const model = getMetaValue(db, 'model_name') ?? 'unknown';
-  const dimensions = getMetaValue(db, 'model_dimensions') ?? 'unknown';
-  const lastIndexed = getMetaValue(db, 'last_indexed_at') ?? 'never';
+    const model = getMetaValue(db, 'model_name') ?? 'unknown';
+    const dimensions = getMetaValue(db, 'model_dimensions') ?? 'unknown';
+    const lastIndexed = getMetaValue(db, 'last_indexed_at') ?? 'never';
 
-  const stat = fs.statSync(dbPath);
-  const sizeMb = (stat.size / 1024 / 1024).toFixed(1);
+    const stat = fs.statSync(dbPath);
+    const sizeMb = (stat.size / 1024 / 1024).toFixed(1);
 
-  const embedded = functions.filter((f) => f.embedding !== null).length;
+    const embedded = functions.filter((f) => f.embedding !== null).length;
 
-  db.close();
-
-  return {
-    exists: true,
-    dbPath,
-    sizeMb,
-    model,
-    dimensions,
-    indexedFunctions: functions.length,
-    unembedded: functions.length - embedded,
-    trackedFiles: trackedFiles.size,
-    lastIndexed,
-    exclusions: ignoreFile.exclusions.length,
-    staleExclusions: staleWarnings.length,
-  };
+    return {
+      exists: true,
+      dbPath,
+      sizeMb,
+      model,
+      dimensions,
+      indexedFunctions: functions.length,
+      unembedded: functions.length - embedded,
+      trackedFiles: trackedFiles.size,
+      lastIndexed,
+      exclusions: ignoreFile.exclusions.length,
+      staleExclusions: staleWarnings.length,
+    };
+  } finally {
+    db.close();
+  }
 }
