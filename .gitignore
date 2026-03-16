@@ -3,3 +3,4 @@ dist/
 .codeuse.db
 *.tsbuildinfo
 experiment/
+codeuse-rs/target/
