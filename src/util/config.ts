@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DEFAULT_EXCLUDES = ['node_modules', 'dist', '.git', 'coverage', '.next', 'build'];
+const DEFAULT_EXCLUDES = ['node_modules', 'dist', '.git', 'coverage', '.next', 'build', 'experiment'];
 
 export function findProjectRoot(startDir: string): string {
   let dir = path.resolve(startDir);

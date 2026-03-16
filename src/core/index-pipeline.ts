@@ -102,7 +102,13 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
       const stat = await fs.stat(fp);
       upsertTrackedFile(db, fp, contentHash(source), stat.mtimeMs);
 
-      const parsed = await parseFile(fp);
+      let parsed;
+      try {
+        parsed = await parseFile(fp);
+      } catch (e) {
+        log(`Warning: failed to parse ${fp}: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
 
       if (parsed.chunks.length > 0) {
         upsertFunctions(db, parsed.chunks);
