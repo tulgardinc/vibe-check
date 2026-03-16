@@ -17,6 +17,8 @@ interface FunctionRow {
   signature_hash: string;
   content_hash: string;
   embedding: Buffer | null;
+  chunk_type: string;
+  context: string | null;
 }
 
 export function upsertFunctions(
@@ -26,9 +28,10 @@ export function upsertFunctions(
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO functions
       (id, file_path, function_name, source_text, start_line, end_line,
-       params_json, return_type, is_exported, signature_hash, content_hash, embedding)
+       params_json, return_type, is_exported, signature_hash, content_hash, embedding,
+       chunk_type, context)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
   `);
 
   const tx = db.transaction((items: FunctionChunk[]) => {
@@ -45,6 +48,8 @@ export function upsertFunctions(
         chunk.isExported ? 1 : 0,
         chunk.signatureHash,
         contentHash(chunk.sourceText),
+        chunk.chunkType,
+        chunk.context,
       );
     }
   });
@@ -132,5 +137,7 @@ function mapRow(row: FunctionRow): StoredFunction {
     signatureHash: row.signature_hash,
     contentHash: row.content_hash,
     embedding: row.embedding,
+    chunkType: (row.chunk_type as 'function' | 'block') ?? 'function',
+    context: row.context,
   };
 }

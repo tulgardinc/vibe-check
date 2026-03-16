@@ -17,8 +17,11 @@ export function formatHuman(result: QueryResult): string {
 
     for (const c of qf.candidates) {
       const similarity = (1 - c.distance).toFixed(2);
+      const contextSuffix = c.chunkType === 'block' && c.context ? ` in ${c.context}` : '';
+      const displayName = `${c.name}${contextSuffix}`;
+      const jaccardSuffix = c.jaccardSimilarity != null ? `, jaccard: ${c.jaccardSimilarity.toFixed(2)}` : '';
       lines.push(
-        `  ${c.name} (${c.path}:${c.line}) — similarity: ${similarity} [${c.detectionMethod}]`,
+        `  ${displayName} (${c.path}:${c.line}) — similarity: ${similarity} [${c.detectionMethod}${jaccardSuffix}]`,
       );
     }
   }

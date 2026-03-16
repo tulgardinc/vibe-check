@@ -11,6 +11,8 @@ export interface StoredFunction {
   signatureHash: string;
   contentHash: string;
   embedding: Buffer | null;
+  chunkType: 'function' | 'block';
+  context: string | null;
 }
 
 export interface FileRecord {

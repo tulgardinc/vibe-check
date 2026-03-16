@@ -23,16 +23,19 @@ export function formatScanHuman(result: ScanResult, projectRoot: string): string
         const relA = path.relative(projectRoot, m.a.path);
         const relB = path.relative(projectRoot, m.b.path);
         const pct = ((1 - m.distance) * 100).toFixed(0);
-        lines.push(`  ${m.a.name} (${relA}:${m.a.line})`);
-        lines.push(`  ${m.b.name} (${relB}:${m.b.line})`);
-        lines.push(`  ${pct}% similar (distance: ${m.distance.toFixed(4)})`);
+        const nameA = m.a.chunkType === 'block' && m.a.context ? `${m.a.name} in ${m.a.context}` : m.a.name;
+        const nameB = m.b.chunkType === 'block' && m.b.context ? `${m.b.name} in ${m.b.context}` : m.b.name;
+        const jaccardInfo = m.jaccardSimilarity != null ? `, jaccard: ${m.jaccardSimilarity.toFixed(2)}` : '';
+        lines.push(`  ${nameA} (${relA}:${m.a.line})`);
+        lines.push(`  ${nameB} (${relB}:${m.b.line})`);
+        lines.push(`  ${pct}% similar (distance: ${m.distance.toFixed(4)}${jaccardInfo})`);
         lines.push('');
       }
     }
   }
 
   lines.push(
-    `${result.meta.pairsFound} pairs from ${result.meta.functionsScanned} functions (${result.meta.elapsedMs}ms)`,
+    `${result.meta.pairsFound} pairs from ${result.meta.chunksScanned} chunks (${result.meta.elapsedMs}ms)`,
   );
 
   return lines.join('\n');

@@ -39,6 +39,20 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
   const files = await findTypeScriptFiles(scanPath);
   log(`Found ${files.length} TypeScript files`);
 
+  if (files.length === 0) {
+    return {
+      filesScanned: 0,
+      functionsIndexed: 0,
+      added: 0,
+      modified: 0,
+      deleted: 0,
+      unchanged: 0,
+      model: 'none',
+      tier: 'none',
+      dimensions: 0,
+    };
+  }
+
   // Check Ollama and get embedder
   const client = createClient();
   const check = await preflight(client);
@@ -96,7 +110,7 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
       }
     }
 
-    log(`Parsed ${totalChunks} functions from ${filesToProcess.length} files`);
+    log(`Parsed ${totalChunks} chunks (functions + blocks) from ${filesToProcess.length} files`);
 
     // Embed functions without embeddings
     const unembedded = getFunctionsWithoutEmbeddings(db);

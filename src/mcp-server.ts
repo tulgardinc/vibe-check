@@ -28,7 +28,7 @@ function mcpError(e: unknown): { content: Array<{ type: 'text'; text: string }>;
 // Tool 1: Query for similar functions
 server.tool(
   'codeuse_query',
-  'Find existing functions in the codebase that are semantically similar to TypeScript code. Pass either a file path or source code. Prefer file path when checking code you already wrote to disk — it avoids sending the full source in the tool call.',
+  `Find existing functions and logic blocks in the codebase that are semantically similar to the given TypeScript code. Uses embedding similarity combined with Jaccard token overlap to rank matches. Results include named functions and inline blocks (chunkType "block") — blocks indicate similar logic nested inside another function. Prefer passing "file" over "source" when the code is already on disk to save tokens. Use codeuse_add_exclusion to suppress false positives.`,
   {
     file: z.string().optional().describe('Path to a TypeScript file to check (preferred over source — saves tokens)'),
     source: z.string().optional().describe('TypeScript source code to check (use when code is not yet on disk)'),
@@ -60,7 +60,7 @@ server.tool(
 // Tool 2: Index the codebase
 server.tool(
   'codeuse_index',
-  'Index TypeScript functions in the codebase for semantic search. Run this once to build the index, or again after code changes to update it incrementally.',
+  'Build or update the semantic index of TypeScript functions and logic blocks. Parses source with tree-sitter, generates embeddings via local Ollama, stores in SQLite. Incremental by default — only re-processes files that changed since the last run.',
   {
     path: z.string().optional().describe('Directory to index (defaults to project root)'),
     force: z.boolean().optional().default(false).describe('Force full re-index, ignoring incremental state'),
@@ -89,7 +89,7 @@ server.tool(
 // Tool 3: Index status
 server.tool(
   'codeuse_status',
-  'Show the health and statistics of the codeuse index: model, function count, tracked files, exclusions.',
+  'Check whether the codeuse index exists and is healthy. Reports: embedding model, indexed chunk count (functions + blocks), tracked files, exclusions, and staleness. If no index exists, run codeuse_index first.',
   {},
   async () => {
     try {
@@ -122,7 +122,7 @@ server.tool(
 // Tool 4: Scan entire codebase for similar function pairs
 server.tool(
   'codeuse_scan',
-  'Scan all indexed functions against each other to find duplicate or similar function pairs across the codebase. Returns deduplicated pairs ranked by similarity.',
+  'Compare all indexed functions and logic blocks against each other to find duplicate or similar pairs across the codebase. Returns deduplicated pairs ranked by combined embedding + Jaccard similarity. Pairs involving "block" chunks indicate similar logic buried inline that could be extracted.',
   {
     topN: z.number().optional().default(50).describe('Maximum number of pairs to return (default: 50)'),
     threshold: z.number().optional().default(0.25).describe('Cosine distance threshold — lower means stricter (default: 0.25)'),
@@ -142,7 +142,7 @@ server.tool(
 // Tool 5: Add a false-positive exclusion
 server.tool(
   'codeuse_add_exclusion',
-  'Mark two functions as NOT duplicates so they are no longer suggested as matches. Use this when a query result is a false positive.',
+  'Permanently suppress a pair of functions/blocks from appearing as matches in query and scan results. Stores the exclusion in .codereuse-ignore.json using signature hashes. Use the signatureHash values from query or scan output.',
   {
     queryFunction: z.string().describe('Name of the query function'),
     queryPath: z.string().describe('File path of the query function'),

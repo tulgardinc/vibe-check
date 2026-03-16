@@ -7,6 +7,9 @@ export interface Candidate {
   detectionMethod: 'embedding' | 'jscpd' | 'combined';
   source: string;
   signatureHash: string;
+  chunkType?: 'function' | 'block';
+  context?: string | null;
+  jaccardSimilarity?: number;
 }
 
 export interface QueryFunction {
@@ -14,6 +17,7 @@ export interface QueryFunction {
   file: string;
   line: number;
   candidates: Candidate[];
+  chunkType?: 'function' | 'block';
 }
 
 export interface QueryResult {
@@ -24,5 +28,6 @@ export interface QueryResult {
     indexedFunctions: number;
     queryFunctions: number;
     elapsedMs: number;
+    indexedBlocks?: number;
   };
 }

@@ -1,30 +1,30 @@
-/** A deduplicated pair of similar functions found during a full codebase scan. */
+interface ScanMatchEntry {
+  name: string;
+  path: string;
+  line: number;
+  signatureHash: string;
+  chunkType?: 'function' | 'block';
+  context?: string | null;
+}
+
+/** A deduplicated pair of similar functions/blocks found during a full codebase scan. */
 export interface ScanMatch {
-  /** Function A (alphabetically first by id). */
-  a: {
-    name: string;
-    path: string;
-    line: number;
-    signatureHash: string;
-  };
-  /** Function B. */
-  b: {
-    name: string;
-    path: string;
-    line: number;
-    signatureHash: string;
-  };
-  /** Cosine distance — lower means more similar (0 = identical). */
+  /** Entry A (alphabetically first by id). */
+  a: ScanMatchEntry;
+  /** Entry B. */
+  b: ScanMatchEntry;
+  /** Combined score (embedding + Jaccard) — lower means more similar. */
   distance: number;
   /** Human-readable similarity tier. */
   similarity: 'identical' | 'nearly identical' | 'very similar' | 'similar' | 'weak';
+  jaccardSimilarity?: number;
 }
 
 export interface ScanResult {
   matches: ScanMatch[];
   meta: {
     model: string;
-    functionsScanned: number;
+    chunksScanned: number;
     pairsFound: number;
     elapsedMs: number;
   };

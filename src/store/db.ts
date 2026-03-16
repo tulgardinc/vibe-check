@@ -43,6 +43,15 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_functions_file ON functions(file_path);
     CREATE INDEX IF NOT EXISTS idx_functions_sig ON functions(signature_hash);
   `);
+
+  // Migration: add chunk_type and context columns if missing
+  const cols = (db.pragma('table_info(functions)') as Array<{ name: string }>).map(c => c.name);
+  if (!cols.includes('chunk_type')) {
+    db.exec("ALTER TABLE functions ADD COLUMN chunk_type TEXT NOT NULL DEFAULT 'function'");
+  }
+  if (!cols.includes('context')) {
+    db.exec('ALTER TABLE functions ADD COLUMN context TEXT');
+  }
 }
 
 export function getMetaValue(db: Database.Database, key: string): string | null {
