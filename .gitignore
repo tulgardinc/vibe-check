@@ -1,4 +1,4 @@
-.vibecheck.db
+.vibecheck.db*
 target/
 generate-parsers.sh
 experiment/
