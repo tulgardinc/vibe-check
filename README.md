@@ -85,20 +85,8 @@ Binaries are in `target/release/`:
 ## Recommended workflow
 
 1. **Index after large changes** — re-index whenever you merge a big PR, finish a refactor, or pull in new code. This keeps the index fresh so results stay relevant.
-   ```bash
-   vibec index
-   ```
-
 2. **Use `query` for targeted checks** — instead of scanning the entire codebase, point `query` at the specific files or snippets you're working on. This gives a much better signal-to-noise ratio than a full scan.
-   ```bash
-   vibec query src/utils/newHelper.ts
-   ```
-
 3. **Use `scan` for periodic audits** — run a full scan occasionally (e.g. before a release or after a large feature lands) to catch duplication that slipped through.
-   ```bash
-   vibec scan
-   ```
-
 4. **Exclude false positives** — when results include intentional duplication (test mocks, generated code, etc.), add exclusions so future results are cleaner.
 
 ## CLI usage
@@ -165,24 +153,6 @@ Any embedding model supported by Ollama can be used. The model is auto-detected 
 
 The MCP server lets AI assistants (Claude Code, Opencode, etc.) use vibecheck directly.
 
-### Setup with `.mcp.json`
-
-Add to your project's `.mcp.json` for Claude or equivalent:
-
-```json
-{
-  "mcpServers": {
-    "vibecheck": {
-      "type": "stdio",
-      "command": "vibecheck-mcp",
-      "env": {
-        "VIBECHECK_MODEL": "nomic-ai/nomic-embed-code",
-        "VIBECHECK_QUERY_PREFIX": "search_query: "
-      }
-    }
-  }
-}
-```
 ### Exposed tools
 
 | Tool | Purpose |
@@ -215,28 +185,7 @@ Test files (`.test.*`, `.spec.*`) and declaration files (`.d.ts`, `.d.tsx`) are 
 
 ## Exclusions
 
-Exclusions are stored in `.vibecheck-ignore.json` at the project root. There are three levels:
-
-**Function pair** — suppress a specific false positive match between two functions:
-```bash
-# Via MCP: use vibecheck_add_exclusion with the signatureHash values from results
-```
-
-**File** — exclude a file or glob pattern from indexing entirely:
-```bash
-# Via MCP: use vibecheck_add_file_exclusion with a pattern like "src/generated/**"
-```
-
-**File pair** — prevent any functions in two files from being compared:
-```bash
-# Via MCP: use vibecheck_add_file_pair_exclusion with fileA and fileB paths
-```
-
-**File group** — same as file pair, but for multiple files at once (expands to all pairwise combinations):
-```bash
-# Via MCP: use vibecheck_add_file_group_exclusion with a list of file paths
-```
-
+The tool exposes mcp tools to exclude checks on functions, files, or file pairs.
 You can also edit `.vibecheck-ignore.json` directly:
 
 ```json
