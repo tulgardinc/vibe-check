@@ -62,12 +62,6 @@ curl -fsSL https://raw.githubusercontent.com/tulgardinc/vibe-check/release/insta
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.ps1))) claude-code
 ```
 
-Multiple tools at once:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.sh | bash -s -- claude-code claude-desktop cursor
-```
-
 The installer auto-detects your platform and architecture. It installs:
 - `vibec` — CLI tool
 - `vibecheck-mcp` — MCP server
