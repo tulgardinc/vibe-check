@@ -177,7 +177,7 @@ All tools that call Ollama accept optional `model`, `ollamaHost`, `dimensions`, 
 - Rust (`.rs`)
 - Python (`.py`)
 
-Test files (`.test.*`, `.spec.*`) and declaration files (`.d.ts`, `.d.tsx`) are automatically excluded.
+Test files and declaration files are automatically configured and excluded per language.
 
 ## Limitations
 
