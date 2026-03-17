@@ -188,11 +188,11 @@ Any embedding model supported by Ollama can be used. The model is auto-detected 
 
 ## MCP server
 
-The MCP server lets AI assistants (Claude Code, Claude Desktop, etc.) use vibecheck directly.
+The MCP server lets AI assistants (Claude Code, Opencode, etc.) use vibecheck directly.
 
 ### Setup with `.mcp.json`
 
-Add to your project's `.mcp.json`:
+Add to your project's `.mcp.json` for Claude or equivalent:
 
 ```json
 {
@@ -208,21 +208,6 @@ Add to your project's `.mcp.json`:
   }
 }
 ```
-
-### Setup with Claude Desktop
-
-Add to your Claude Desktop config:
-
-```json
-{
-  "mcpServers": {
-    "vibecheck": {
-      "command": "/path/to/vibecheck-mcp"
-    }
-  }
-}
-```
-
 ### Exposed tools
 
 | Tool | Purpose |
