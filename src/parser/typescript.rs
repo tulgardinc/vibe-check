@@ -1,20 +1,14 @@
 use crate::parser::language::{LanguageSupport, NodeRole};
 use crate::parser::types::ParamInfo;
-use std::collections::HashSet;
-use std::sync::LazyLock;
 use tree_sitter::Node;
 
-static STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
-        "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "new",
-        "this", "typeof", "instanceof", "void", "delete", "in", "of", "import", "export",
-        "from", "default", "async", "await", "class", "extends", "implements", "interface",
-        "type", "enum", "true", "false", "null", "undefined",
-    ]
-    .into_iter()
-    .collect()
-});
+static STOP_WORDS: &[&str] = &[
+    "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
+    "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "new",
+    "this", "typeof", "instanceof", "void", "delete", "in", "of", "import", "export",
+    "from", "default", "async", "await", "class", "extends", "implements", "interface",
+    "type", "enum", "true", "false", "null", "undefined",
+];
 
 pub struct TypeScriptSupport;
 
@@ -70,8 +64,12 @@ impl LanguageSupport for TypeScriptSupport {
         }
     }
 
-    fn stop_words(&self) -> &HashSet<&'static str> {
-        &STOP_WORDS
+    fn is_identifier(&self, node: Node) -> bool {
+        matches!(node.kind(), "identifier" | "property_identifier")
+    }
+
+    fn stop_words(&self) -> &'static [&'static str] {
+        STOP_WORDS
     }
 
     fn extract_function_name(&self, node: Node, source: &[u8]) -> Option<String> {

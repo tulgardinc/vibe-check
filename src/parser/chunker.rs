@@ -102,13 +102,15 @@ fn walk_node(
 
     if role == NodeRole::Function {
         if let Some(name) = lang.extract_function_name(node, source) {
+            let exported = lang.is_function_exported(&name, parent_exported);
             if let Some(chunk) =
-                build_chunk(&name, node, source, file_path, parent_exported, lang)
+                build_chunk(&name, node, source, file_path, exported, lang)
             {
                 chunks.push(chunk);
             }
-            let func_node = lang.inner_function_node(node).unwrap_or(node);
-            extract_blocks(func_node, source, file_path, &name, chunks, lang);
+            if let Some(body) = lang.function_body(node) {
+                walk_for_blocks(body, source, file_path, &name, chunks, lang);
+            }
         }
         return; // don't recurse into function bodies
     }
@@ -152,9 +154,9 @@ fn format_signature(
 
 /// Collect identifier tokens from the AST, skipping type annotations.
 fn collect_tokens(node: Node, source: &[u8], lang: &dyn LanguageSupport) -> HashSet<String> {
-    let stops = lang.stop_words();
+    let stops: HashSet<&str> = lang.stop_words().iter().copied().collect();
     let mut tokens = HashSet::new();
-    collect_tokens_recursive(node, source, &mut tokens, lang, stops);
+    collect_tokens_recursive(node, source, &mut tokens, lang, &stops);
     tokens
 }
 
@@ -170,7 +172,7 @@ fn collect_tokens_recursive(
         return;
     }
 
-    if node.kind() == "identifier" || node.kind() == "property_identifier" {
+    if lang.is_identifier(node) {
         let text = node.utf8_text(source).unwrap_or("");
         let lower = text.to_lowercase();
         if lower.len() > 1 && !stops.contains(lower.as_str()) {
@@ -233,19 +235,6 @@ fn build_chunk(
     })
 }
 
-fn extract_blocks(
-    func_node: Node,
-    source: &[u8],
-    file_path: &str,
-    context_name: &str,
-    chunks: &mut Vec<FunctionChunk>,
-    lang: &dyn LanguageSupport,
-) {
-    if let Some(body) = func_node.child_by_field_name("body") {
-        walk_for_blocks(body, source, file_path, context_name, chunks, lang);
-    }
-}
-
 fn walk_for_blocks(
     node: Node,
     source: &[u8],
@@ -275,8 +264,7 @@ fn walk_for_blocks(
     for child in node.named_children(&mut cursor) {
         let child_role = lang.classify_node(child);
         if child_role == NodeRole::Function {
-            let func_node = lang.inner_function_node(child).unwrap_or(child);
-            if let Some(body) = func_node.child_by_field_name("body") {
+            if let Some(body) = lang.function_body(child) {
                 if lang.classify_node(body) == NodeRole::Block
                     && is_eligible_block(body, lang)
                     && let Some(chunk) =

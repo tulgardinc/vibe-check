@@ -1,6 +1,6 @@
 # vibecheck
 
-Semantic code deduplication for TypeScript. Catches when new code reimplements something that already exists in the codebase — including logic buried inline inside other functions.
+Semantic code deduplication. Catches when new code reimplements something that already exists in the codebase — including logic buried inline inside other functions.
 
 Designed for LLM-assisted development, where models routinely rewrite utilities instead of reusing them. Works as a CLI tool or an MCP server that gives your AI assistant visibility into what's already been written.
 
@@ -19,7 +19,7 @@ Index:  parse (functions + blocks) → embed → store
 Query:  parse → embed → KNN overfetch → Jaccard re-rank → exclusions → top-K
 ```
 
-1. **Parse** — tree-sitter extracts functions and eligible logic blocks (6+ lines with control flow) from TypeScript
+1. **Parse** — tree-sitter extracts functions and eligible logic blocks (6+ lines with control flow)
 2. **Embed** — local Ollama generates vector embeddings for each chunk
 3. **Store** — SQLite + sqlite-vec for fast KNN cosine search
 4. **Rank** — combines embedding distance with Jaccard token overlap for accurate re-ranking
@@ -132,10 +132,13 @@ Exposes five tools:
 | `vibecheck_status` | Check index health |
 | `vibecheck_add_exclusion` | Suppress a false positive match |
 
+## Supported languages
+
+- TypeScript
+
 ## Limitations
 
 - **Functions only** — top-level code outside of functions (module-level logic, script-style files) is not indexed. Only named functions, methods, and eligible inline blocks within them are captured.
-- **TypeScript only** — the parser uses tree-sitter-typescript. Other languages would need their own grammars.
 
 ## False positive management
 
