@@ -2,7 +2,7 @@
   <img src="VibeCheckIcon.svg" alt="vibecheck" width="128" />
 </p>
 
-# vibecheck
+# Vibe Check
 
 Semantic code deduplication. Catches when new code reimplements something that already exists in the codebase — including logic buried inline inside other functions.
 
