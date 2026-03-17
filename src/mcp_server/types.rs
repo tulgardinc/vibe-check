@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 // --- Indexing state shared across tool calls ---
 
@@ -11,6 +12,7 @@ pub enum IndexingStatus {
     Running {
         embedded: Arc<std::sync::atomic::AtomicUsize>,
         total: usize,
+        started_at: Instant,
     },
     Done(String),
     Failed(String),

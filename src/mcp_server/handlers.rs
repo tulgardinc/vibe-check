@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 struct CommonOptions {
     db_path: Option<String>,
@@ -89,10 +90,23 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
     };
 
     match current {
-        IndexingStatus::Running { embedded, total } => {
+        IndexingStatus::Running { embedded, total, started_at } => {
             let done = embedded.load(Ordering::Relaxed);
+            let elapsed = started_at.elapsed();
+            let eta = if done > 0 && total > 0 {
+                let secs_per_batch = elapsed.as_secs_f64() / done as f64;
+                let remaining = secs_per_batch * (total - done) as f64;
+                let mins = (remaining / 60.0).ceil() as u64;
+                if mins > 1 {
+                    format!(" Estimated ~{mins} minutes remaining.")
+                } else {
+                    " Less than a minute remaining.".to_string()
+                }
+            } else {
+                String::new()
+            };
             Ok(format!(
-                "Indexing in progress: {done}/{total} batches embedded. Call again to check progress."
+                "Indexing in progress: {done}/{total} batches embedded.{eta} This can take a while — feel free to work on other tasks in the meantime. Call again to check progress."
             ))
         }
         IndexingStatus::Done(ref msg) => {
@@ -122,6 +136,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
                 s.status = IndexingStatus::Running {
                     embedded: Arc::clone(&embedded),
                     total: 0,
+                    started_at: Instant::now(),
                 };
             }
 
@@ -133,9 +148,14 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
             impl IndexProgress for McpProgress {
                 fn on_start(&self, total_batches: usize) {
                     let mut s = lock_state(&self.state);
+                    let started_at = match &s.status {
+                        IndexingStatus::Running { started_at, .. } => *started_at,
+                        _ => Instant::now(),
+                    };
                     s.status = IndexingStatus::Running {
                         embedded: Arc::clone(&self.embedded),
                         total: total_batches,
+                        started_at,
                     };
                 }
 

@@ -46,52 +46,29 @@ ollama pull nomic-embed-code
 
 ## Install
 
-Download the latest binary for your platform:
+One-liner that downloads the binaries, adds them to your PATH, and sets up the skill + MCP config for your editor. Run from your project directory:
 
-<details>
-<summary><b>macOS (Apple Silicon)</b></summary>
+Provide one or more of as arguments `claude-code`, `cursor`, `opencode`
+Omit the tool name to install binaries only.
 
-```bash
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-aarch64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-aarch64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
-```
-</details>
-
-<details>
-<summary><b>macOS (Intel)</b></summary>
+**macOS / Linux:**
 
 ```bash
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-x86_64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-x86_64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
+curl -fsSL https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.sh | bash -s -- claude-code
 ```
-</details>
 
-<details>
-<summary><b>Linux (x86_64)</b></summary>
-
-```bash
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-x86_64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-x86_64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
-```
-</details>
-
-<details>
-<summary><b>Linux (aarch64)</b></summary>
-
-```bash
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-aarch64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
-curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-aarch64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
-```
-</details>
-
-<details>
-<summary><b>Windows (x86_64)</b></summary>
+**Windows (PowerShell):**
 
 ```powershell
-Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibec.exe"
-Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibecheck-mcp.exe"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.ps1))) claude-code
 ```
-</details>
+
+
+The installer auto-detects your platform and architecture. It installs:
+- `vibec` — CLI tool
+- `vibecheck-mcp` — MCP server
+- [`SKILL.md`](SKILL.md) — AI skill with setup guide and workflow reference (placed in the right location for your editor)
+- `.mcp.json` — MCP server configuration (created or updated)
 
 <details>
 <summary><b>Build from source</b></summary>
