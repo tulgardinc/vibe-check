@@ -161,6 +161,19 @@ fn run_index_cmd(
 
     struct CliProgress {
         bar: std::sync::Mutex<Option<ProgressBar>>,
+        started_at: std::sync::Mutex<Option<std::time::Instant>>,
+    }
+
+    impl CliProgress {
+        fn format_eta(secs: u64) -> String {
+            if secs >= 3600 {
+                format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+            } else if secs >= 60 {
+                format!("{}m {:02}s", secs / 60, secs % 60)
+            } else {
+                format!("{}s", secs)
+            }
+        }
     }
 
     impl IndexProgress for CliProgress {
@@ -168,17 +181,32 @@ fn run_index_cmd(
             let bar = ProgressBar::new(total_batches as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
-                    .template("Embedding [{bar:30}] Batches {pos}/{len} ({elapsed} elapsed, {eta} remaining)")
+                    .template("Embedding [{bar:30}] Batches {pos}/{len} ({elapsed} elapsed{msg})")
                     .unwrap()
                     .progress_chars("=> "),
             );
             bar.enable_steady_tick(std::time::Duration::from_millis(200));
             *self.bar.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar);
+            *self.started_at.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(std::time::Instant::now());
         }
 
         fn on_progress(&self) {
-            if let Some(ref bar) = *self.bar.lock().unwrap_or_else(|e| e.into_inner()) {
+            let guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref bar) = *guard {
                 bar.inc(1);
+                let pos = bar.position();
+                let total = bar.length().unwrap_or(0);
+                if pos > 0 && total > 0 {
+                    let elapsed = self
+                        .started_at
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .map(|s| s.elapsed().as_secs())
+                        .unwrap_or(0);
+                    let remaining = elapsed * (total - pos) / pos;
+                    bar.set_message(format!(", ~{} remaining", Self::format_eta(remaining)));
+                }
             }
         }
 
@@ -196,6 +224,7 @@ fn run_index_cmd(
         ollama,
         progress: Some(Box::new(CliProgress {
             bar: std::sync::Mutex::new(None),
+            started_at: std::sync::Mutex::new(None),
         })),
         cancel: None,
         embedder: None,
