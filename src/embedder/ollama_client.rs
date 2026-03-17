@@ -16,6 +16,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_POLL_ATTEMPTS: u32 = 20;
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const EMBED_MAX_RETRIES: usize = 3;
+const EMBED_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Model detection priority: (base_name, default_tier).
 /// Checked in order; first match wins.
@@ -108,29 +110,51 @@ impl OllamaClient {
     }
 
     pub fn embed(&self, model: &str, inputs: &[&str]) -> Result<Vec<Vec<f32>>, VibecheckError> {
-        let response = self
-            .client
-            .post(format!("{}/api/embed", self.base_url))
-            .json(&EmbedRequest { model, input: inputs })
-            .send()?;
+        let mut last_err = None;
+        for attempt in 0..EMBED_MAX_RETRIES {
+            if attempt > 0 {
+                logger::verbose(&format!(
+                    "Retrying embed request (attempt {}/{})",
+                    attempt + 1,
+                    EMBED_MAX_RETRIES
+                ));
+                thread::sleep(EMBED_RETRY_DELAY);
+            }
 
-        let status = response.status();
-        let body = response.text()?;
+            let send_result = self
+                .client
+                .post(format!("{}/api/embed", self.base_url))
+                .json(&EmbedRequest { model, input: inputs })
+                .send();
 
-        if !status.is_success() {
-            return Err(VibecheckError::Ollama(format!(
-                "Ollama embed returned {status}: {body}"
-            )));
+            let response = match send_result {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            let body = response.text()?;
+
+            if !status.is_success() {
+                return Err(VibecheckError::Ollama(format!(
+                    "Ollama embed returned {status}: {body}"
+                )));
+            }
+
+            let resp: EmbedResponse = serde_json::from_str(&body).map_err(|e| {
+                VibecheckError::Ollama(format!(
+                    "Failed to parse Ollama response: {e}\nResponse body (first 500 chars): {}",
+                    &body[..body.len().min(500)]
+                ))
+            })?;
+
+            return Ok(resp.embeddings);
         }
 
-        let resp: EmbedResponse = serde_json::from_str(&body).map_err(|e| {
-            VibecheckError::Ollama(format!(
-                "Failed to parse Ollama response: {e}\nResponse body (first 500 chars): {}",
-                &body[..body.len().min(500)]
-            ))
-        })?;
-
-        Ok(resp.embeddings)
+        Err(last_err.unwrap().into())
     }
 
     /// Resolve which model to use. Checks (in order): explicit argument, VIBECHECK_MODEL env var, auto-detect.
