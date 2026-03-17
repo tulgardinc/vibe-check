@@ -1,17 +1,31 @@
 use crate::error::VibecheckError;
 use crate::util::logger;
 
+/// Fallback truncation limit when model metadata is unavailable.
+/// Conservative for nomic-embed-code's 8192-token context at ~2 chars/token.
+pub const DEFAULT_MAX_INPUT_BYTES: usize = 16_000;
+
+/// Conservative chars-per-token estimate for code.
+pub const CHARS_PER_TOKEN_ESTIMATE: usize = 2;
+
+pub fn max_input_bytes_from_context(context_length: usize) -> usize {
+    context_length * CHARS_PER_TOKEN_ESTIMATE
+}
+
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
     pub name: String,
     pub dimensions: usize,
     pub tier: String,
+    pub max_input_bytes: usize,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct OllamaConfig {
     pub model: Option<String>,
     pub host: Option<String>,
+    pub context_length: Option<usize>,
+    pub max_input_bytes: Option<usize>,
 }
 
 pub trait Embedder {
@@ -38,7 +52,7 @@ pub fn resolve_embedder(
         }
         None => {
             let client = crate::embedder::ollama_client::OllamaClient::new(config.host.as_deref())?;
-            let (embedder, msg) = client.preflight(config.model.as_deref())?;
+            let (embedder, msg) = client.preflight(config)?;
             logger::info(&msg);
             Ok((Box::new(embedder), msg))
         }

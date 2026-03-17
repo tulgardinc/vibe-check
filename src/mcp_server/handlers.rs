@@ -25,6 +25,8 @@ impl CommonOptions {
             ollama: OllamaConfig {
                 model: args.get("model").and_then(|v| v.as_str()).map(String::from),
                 host: args.get("ollamaHost").and_then(|v| v.as_str()).map(String::from),
+                context_length: args.get("contextLength").and_then(|v| v.as_u64()).map(|v| v as usize),
+                max_input_bytes: args.get("maxInputBytes").and_then(|v| v.as_u64()).map(|v| v as usize),
             },
         }
     }

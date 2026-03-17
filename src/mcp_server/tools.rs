@@ -14,6 +14,8 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "threshold": { "type": "number", "default": 0.3 },
                     "model": { "type": "string", "description": "Override embedding model name" },
                     "ollamaHost": { "type": "string", "description": "Override Ollama server URL" },
+                    "contextLength": { "type": "number", "description": "Override model context length in tokens" },
+                    "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),
@@ -28,6 +30,8 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "force": { "type": "boolean", "default": false },
                     "model": { "type": "string", "description": "Override embedding model name" },
                     "ollamaHost": { "type": "string", "description": "Override Ollama server URL" },
+                    "contextLength": { "type": "number", "description": "Override model context length in tokens" },
+                    "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),

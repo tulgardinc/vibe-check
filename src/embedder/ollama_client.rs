@@ -1,9 +1,12 @@
 use crate::embedder::embed::OllamaEmbedder;
-use crate::embedder::types::ModelInfo;
+use crate::embedder::types::{
+    ModelInfo, OllamaConfig, DEFAULT_MAX_INPUT_BYTES, max_input_bytes_from_context,
+};
 use crate::error::VibecheckError;
 use crate::util::logger;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -45,6 +48,24 @@ struct EmbedRequest<'a> {
 #[derive(Deserialize)]
 struct EmbedResponse {
     embeddings: Vec<Vec<f32>>,
+}
+
+#[derive(Serialize)]
+struct ShowRequest<'a> {
+    name: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ShowResponse {
+    #[serde(default)]
+    model_info: HashMap<String, serde_json::Value>,
+}
+
+/// Metadata extracted from Ollama's `/api/show` GGUF model_info.
+#[derive(Debug, Default)]
+pub struct OllamaModelMeta {
+    pub context_length: Option<usize>,
+    pub embedding_length: Option<usize>,
 }
 
 fn format_available_models(names: &[String]) -> String {
@@ -110,9 +131,10 @@ impl OllamaClient {
     }
 
     /// Resolve which model to use. Checks (in order): explicit argument, VIBECHECK_MODEL env var, auto-detect.
-    pub fn resolve_model(&self, explicit: Option<&str>) -> Result<ModelInfo, VibecheckError> {
-        let model_name = explicit
-            .map(String::from)
+    pub fn resolve_model(&self, config: &OllamaConfig) -> Result<ModelInfo, VibecheckError> {
+        let model_name = config
+            .model
+            .clone()
             .or_else(|| std::env::var("VIBECHECK_MODEL").ok());
 
         match model_name {
@@ -127,38 +149,53 @@ impl OllamaClient {
                          Pull it with: ollama pull {name}"
                     )));
                 }
-                let dimensions = self.detect_dimensions(&name)?;
+                let meta = self.show_model(&name);
+                let dimensions = meta
+                    .embedding_length
+                    .unwrap_or(self.detect_dimensions(&name)?);
+                let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 Ok(ModelInfo {
                     name,
                     dimensions,
                     tier: "custom".to_string(),
+                    max_input_bytes,
                 })
             }
-            None => self.detect_model(),
+            None => self.detect_model(config),
         }
     }
 
-    fn detect_model(&self) -> Result<ModelInfo, VibecheckError> {
+    fn detect_model(&self, config: &OllamaConfig) -> Result<ModelInfo, VibecheckError> {
         let names = self.list_models()?;
 
         for (base_name, default_tier) in MODEL_PRIORITIES {
             // Exact match or :latest tag
             if names.iter().any(|n| n == *base_name || n == &format!("{base_name}:latest")) {
-                let dimensions = self.detect_dimensions(base_name)?;
+                let meta = self.show_model(base_name);
+                let dimensions = meta
+                    .embedding_length
+                    .unwrap_or(self.detect_dimensions(base_name)?);
+                let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 return Ok(ModelInfo {
                     name: base_name.to_string(),
                     dimensions,
                     tier: default_tier.to_string(),
+                    max_input_bytes,
                 });
             }
             // Tagged variant (e.g., nomic-embed-code:137m)
             if let Some(found) = names.iter().find(|n| n.starts_with(&format!("{base_name}:"))) {
-                let dimensions = self.detect_dimensions(found)?;
+                let meta = self.show_model(found);
+                let dimensions = meta
+                    .embedding_length
+                    .unwrap_or(self.detect_dimensions(found)?);
                 let tier = found.split(':').nth(1).unwrap_or("custom");
+                let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 return Ok(ModelInfo {
                     name: found.clone(),
                     dimensions,
                     tier: tier.to_string(),
+                    max_input_bytes,
                 });
             }
         }
@@ -183,6 +220,89 @@ impl OllamaClient {
                 "No embedding returned for dimension detection".into(),
             )),
         }
+    }
+
+    /// Query Ollama's `/api/show` for GGUF model metadata.
+    /// Returns defaults on any failure — never fatal.
+    fn show_model(&self, model_name: &str) -> OllamaModelMeta {
+        let resp = self
+            .client
+            .post(format!("{}/api/show", self.base_url))
+            .json(&ShowRequest { name: model_name })
+            .send();
+
+        let body: ShowResponse = match resp {
+            Ok(r) if r.status().is_success() => match r.json() {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    logger::verbose(&format!("Failed to parse /api/show response: {e}"));
+                    return OllamaModelMeta::default();
+                }
+            },
+            Ok(r) => {
+                logger::verbose(&format!("/api/show returned {}", r.status()));
+                return OllamaModelMeta::default();
+            }
+            Err(e) => {
+                logger::verbose(&format!("/api/show request failed: {e}"));
+                return OllamaModelMeta::default();
+            }
+        };
+
+        let arch = body
+            .model_info
+            .get("general.architecture")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let arch = match arch {
+            Some(a) => a,
+            None => return OllamaModelMeta::default(),
+        };
+
+        let context_length = body
+            .model_info
+            .get(&format!("{arch}.context_length"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let embedding_length = body
+            .model_info
+            .get(&format!("{arch}.embedding_length"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        OllamaModelMeta {
+            context_length,
+            embedding_length,
+        }
+    }
+
+    /// Compute max_input_bytes from overrides, env vars, and model metadata.
+    fn resolve_max_input_bytes(config: &OllamaConfig, meta: &OllamaModelMeta) -> usize {
+        // Priority: CLI max_input_bytes > env MAX_INPUT_BYTES > CLI context_length > env CONTEXT_LENGTH > metadata > default
+        if let Some(v) = config.max_input_bytes {
+            return v;
+        }
+        if let Some(v) = std::env::var("VIBECHECK_MAX_INPUT_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            return v;
+        }
+        if let Some(v) = config.context_length {
+            return max_input_bytes_from_context(v);
+        }
+        if let Some(v) = std::env::var("VIBECHECK_CONTEXT_LENGTH")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            return max_input_bytes_from_context(v);
+        }
+        if let Some(v) = meta.context_length {
+            return max_input_bytes_from_context(v);
+        }
+        DEFAULT_MAX_INPUT_BYTES
     }
 
     /// Try to start Ollama as a background process.
@@ -214,7 +334,7 @@ impl OllamaClient {
         }
     }
 
-    pub fn preflight(self, model_override: Option<&str>) -> Result<(OllamaEmbedder, String), VibecheckError> {
+    pub fn preflight(self, config: &OllamaConfig) -> Result<(OllamaEmbedder, String), VibecheckError> {
         let mut healthy = self.check_health();
 
         if !healthy && self.try_start_ollama() {
@@ -233,10 +353,10 @@ impl OllamaClient {
             ));
         }
 
-        let model = self.resolve_model(model_override)?;
+        let model = self.resolve_model(config)?;
         let message = format!(
-            "Ollama is running. Using {} ({}, {}d).",
-            model.name, model.tier, model.dimensions
+            "Ollama is running. Using {} ({}, {}d, {}b max input).",
+            model.name, model.tier, model.dimensions, model.max_input_bytes
         );
 
         let embedder = OllamaEmbedder::new(self, &model);

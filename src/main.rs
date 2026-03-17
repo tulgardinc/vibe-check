@@ -26,6 +26,14 @@ struct Cli {
     #[arg(long, global = true)]
     ollama_host: Option<String>,
 
+    /// Override model context length in tokens (derives max input bytes)
+    #[arg(long, global = true)]
+    context_length: Option<usize>,
+
+    /// Override max input bytes for truncation
+    #[arg(long, global = true)]
+    max_input_bytes: Option<usize>,
+
     /// Database file path
     #[arg(long, global = true)]
     db: Option<String>,
@@ -91,6 +99,8 @@ fn main() {
     let ollama = vibecheck::embedder::types::OllamaConfig {
         model: cli.model,
         host: cli.ollama_host,
+        context_length: cli.context_length,
+        max_input_bytes: cli.max_input_bytes,
     };
     let db = cli.db;
 
