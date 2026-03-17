@@ -32,17 +32,23 @@ esac
 
 # --- Install binaries ---
 
-if [ "$PLATFORM" = "darwin" ]; then
-  BIN_DIR="/usr/local/bin"
-else
-  BIN_DIR="${HOME}/.local/bin"
-  mkdir -p "$BIN_DIR"
-fi
+BIN_DIR="${HOME}/.local/bin"
+mkdir -p "$BIN_DIR"
 
 info "Installing vibecheck ($PLATFORM-$ARCH)..."
 
+# Download both binaries in parallel (gzipped)
 for bin in vibec vibecheck-mcp; do
-  curl -fsSL "$BASE_URL/${bin}-${PLATFORM}-${ARCH}" -o "$BIN_DIR/$bin"
+  curl -fsSL "$BASE_URL/${bin}-${PLATFORM}-${ARCH}.gz" -o "$BIN_DIR/${bin}.gz" &
+done
+wait
+
+for bin in vibec vibecheck-mcp; do
+  if [ ! -s "$BIN_DIR/${bin}.gz" ]; then
+    rm -f "$BIN_DIR/${bin}.gz"
+    err "Failed to download $bin. Check that a release exists at $BASE_URL"
+  fi
+  gunzip -f "$BIN_DIR/${bin}.gz"
   chmod +x "$BIN_DIR/$bin"
   ok "$bin -> $BIN_DIR/$bin"
 done
@@ -124,14 +130,15 @@ for TOOL in "${TOOLS[@]}"; do
       add_mcp_config "$DESKTOP_CONFIG"
       ;;
     cursor)
-      mkdir -p "$HOME/.cursor/rules"
-      curl -fsSL "$SKILL_URL" -o "$HOME/.cursor/rules/vibecheck.md"
-      ok "Skill -> ~/.cursor/rules/vibecheck.md"
+      mkdir -p "$HOME/.cursor/skills/vibe-check"
+      curl -fsSL "$SKILL_URL" -o "$HOME/.cursor/skills/vibe-check/SKILL.md"
+      ok "Skill -> ~/.cursor/skills/vibe-check/SKILL.md"
       add_mcp_config "$HOME/.cursor/mcp.json"
       ;;
     opencode)
-      curl -fsSL "$SKILL_URL" -o "$HOME/VIBECHECK.md"
-      ok "Skill -> ~/VIBECHECK.md"
+      mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills/vibe-check"
+      curl -fsSL "$SKILL_URL" -o "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills/vibe-check/SKILL.md"
+      ok "Skill -> ~/.config/opencode/skills/vibe-check/SKILL.md"
       add_mcp_config "$HOME/.mcp.json"
       ;;
     *)

@@ -27,10 +27,32 @@ if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir -Forc
 
 Info "Installing vibecheck (windows-$Arch)..."
 
+# Download both binaries in parallel (gzipped)
+$jobs = @()
 foreach ($bin in @('vibec', 'vibecheck-mcp')) {
-    $url = "$BaseUrl/$bin-windows-$Arch.exe"
+    $url = "$BaseUrl/$bin-windows-$Arch.exe.gz"
+    $gzDest = Join-Path $BinDir "$bin.exe.gz"
+    $jobs += Start-Job -ScriptBlock {
+        param($u, $d)
+        Invoke-WebRequest -Uri $u -OutFile $d -UseBasicParsing
+    } -ArgumentList $url, $gzDest
+}
+$jobs | Wait-Job | Out-Null
+$jobs | Remove-Job -Force
+
+foreach ($bin in @('vibec', 'vibecheck-mcp')) {
+    $gzPath = Join-Path $BinDir "$bin.exe.gz"
     $dest = Join-Path $BinDir "$bin.exe"
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    if (-not (Test-Path $gzPath) -or (Get-Item $gzPath).Length -eq 0) {
+        Remove-Item $gzPath -ErrorAction SilentlyContinue
+        Err "Failed to download $bin. Check that a release exists at $BaseUrl"
+    }
+    $inStream = [System.IO.File]::OpenRead($gzPath)
+    $gzStream = New-Object System.IO.Compression.GZipStream($inStream, [System.IO.Compression.CompressionMode]::Decompress)
+    $outStream = [System.IO.File]::Create($dest)
+    $gzStream.CopyTo($outStream)
+    $outStream.Close(); $gzStream.Close(); $inStream.Close()
+    Remove-Item $gzPath
     Ok "$bin.exe -> $dest"
 }
 
@@ -108,15 +130,17 @@ foreach ($Tool in $Tools) {
             Add-McpConfig $desktopConfig
         }
         '^cursor$' {
-            $cursorRules = Join-Path $Home_ '.cursor\rules'
-            New-Item -ItemType Directory -Path $cursorRules -Force | Out-Null
-            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $cursorRules 'vibecheck.md') -UseBasicParsing
-            Ok "Skill -> ~/.cursor/rules/vibecheck.md"
+            $cursorSkill = Join-Path $Home_ '.cursor\skills\vibe-check'
+            New-Item -ItemType Directory -Path $cursorSkill -Force | Out-Null
+            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $cursorSkill 'SKILL.md') -UseBasicParsing
+            Ok "Skill -> ~/.cursor/skills/vibe-check/SKILL.md"
             Add-McpConfig (Join-Path $Home_ '.cursor\mcp.json')
         }
         '^opencode$' {
-            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $Home_ 'VIBECHECK.md') -UseBasicParsing
-            Ok "Skill -> ~/VIBECHECK.md"
+            $ocSkill = Join-Path $env:APPDATA 'opencode\skills\vibe-check'
+            New-Item -ItemType Directory -Path $ocSkill -Force | Out-Null
+            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $ocSkill 'SKILL.md') -UseBasicParsing
+            Ok "Skill -> opencode/skills/vibe-check/SKILL.md"
             Add-McpConfig (Join-Path $Home_ '.mcp.json')
         }
         default {
