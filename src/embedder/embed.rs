@@ -6,8 +6,6 @@ use crate::util::logger;
 /// Number of inputs to send per Ollama API call.
 const EMBED_BATCH_SIZE: usize = 32;
 
-const SEARCH_QUERY_PREFIX: &str = "search_query: ";
-
 fn truncate_input<'a>(input: &'a str, max_bytes: usize, context: &str) -> &'a str {
     if input.len() <= max_bytes {
         input
@@ -30,6 +28,7 @@ pub struct OllamaEmbedder {
     dimensions: usize,
     tier: String,
     max_input_bytes: usize,
+    query_prefix: String,
 }
 
 impl OllamaEmbedder {
@@ -40,6 +39,7 @@ impl OllamaEmbedder {
             dimensions: model.dimensions,
             tier: model.tier.clone(),
             max_input_bytes: model.max_input_bytes,
+            query_prefix: model.query_prefix.clone(),
         }
     }
 }
@@ -82,7 +82,7 @@ impl Embedder for OllamaEmbedder {
 
     fn embed_query(&self, input: &str) -> Result<Vec<f32>, VibecheckError> {
         let truncated = truncate_input(input, self.max_input_bytes, "query");
-        let prefixed = format!("{SEARCH_QUERY_PREFIX}{truncated}");
+        let prefixed = format!("{}{truncated}", self.query_prefix);
         let embeddings = self.client.embed(&self.model_name, &[&prefixed])?;
         embeddings
             .into_iter()

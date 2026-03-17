@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long, global = true)]
     max_input_bytes: Option<usize>,
 
+    /// Query prefix prepended to search inputs (overrides VIBECHECK_QUERY_PREFIX env var; auto-detected for Nomic models)
+    #[arg(long, global = true)]
+    query_prefix: Option<String>,
+
     /// Database file path
     #[arg(long, global = true)]
     db: Option<String>,
@@ -101,6 +105,7 @@ fn main() {
         host: cli.ollama_host,
         context_length: cli.context_length,
         max_input_bytes: cli.max_input_bytes,
+        query_prefix: cli.query_prefix,
     };
     let db = cli.db;
 

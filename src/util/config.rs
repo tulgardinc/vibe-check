@@ -51,10 +51,6 @@ pub fn resolve_existing_db(
     Ok(db_path.to_string_lossy().to_string())
 }
 
-pub fn find_typescript_files(root_dir: &Path) -> Vec<PathBuf> {
-    find_source_files(root_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,19 +84,5 @@ mod tests {
         let root = PathBuf::from("/some/project");
         let db = resolve_db_path(&root, None);
         assert_eq!(db, PathBuf::from("/some/project/.vibecheck.db"));
-    }
-
-    #[test]
-    fn find_ts_files_filters_correctly() {
-        let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("app.ts"), "").unwrap();
-        fs::write(tmp.path().join("types.d.ts"), "").unwrap();
-        fs::write(tmp.path().join("app.test.ts"), "").unwrap();
-        fs::write(tmp.path().join("app.spec.ts"), "").unwrap();
-        fs::write(tmp.path().join("style.css"), "").unwrap();
-
-        let files = find_typescript_files(tmp.path());
-        assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("app.ts"));
     }
 }

@@ -8,14 +8,15 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "file": { "type": "string", "description": "Path to TypeScript file" },
-                    "source": { "type": "string", "description": "TypeScript source code" },
+                    "file": { "type": "string", "description": "Path to source file" },
+                    "source": { "type": "string", "description": "Source code to check" },
                     "topK": { "type": "number", "default": 5 },
                     "threshold": { "type": "number", "default": 0.3 },
                     "model": { "type": "string", "description": "Override embedding model name" },
                     "ollamaHost": { "type": "string", "description": "Override Ollama server URL" },
                     "contextLength": { "type": "number", "description": "Override model context length in tokens" },
                     "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
+                    "queryPrefix": { "type": "string", "description": "Override query prefix prepended to search inputs" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),
@@ -32,6 +33,7 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "ollamaHost": { "type": "string", "description": "Override Ollama server URL" },
                     "contextLength": { "type": "number", "description": "Override model context length in tokens" },
                     "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
+                    "queryPrefix": { "type": "string", "description": "Override query prefix prepended to search inputs" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),

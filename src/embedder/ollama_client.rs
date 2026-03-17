@@ -24,6 +24,9 @@ const MODEL_PRIORITIES: &[(&str, &str)] = &[
     ("nomic-embed-text", "7b"),
 ];
 
+/// Default query prefix for Nomic embedding models.
+const DEFAULT_NOMIC_QUERY_PREFIX: &str = "search_query: ";
+
 pub struct OllamaClient {
     client: Client,
     base_url: String,
@@ -154,11 +157,13 @@ impl OllamaClient {
                     .embedding_length
                     .unwrap_or(self.detect_dimensions(&name)?);
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
+                let query_prefix = Self::resolve_query_prefix(config, &name);
                 Ok(ModelInfo {
                     name,
                     dimensions,
                     tier: "custom".to_string(),
                     max_input_bytes,
+                    query_prefix,
                 })
             }
             None => self.detect_model(config),
@@ -176,11 +181,13 @@ impl OllamaClient {
                     .embedding_length
                     .unwrap_or(self.detect_dimensions(base_name)?);
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
+                let query_prefix = Self::resolve_query_prefix(config, base_name);
                 return Ok(ModelInfo {
                     name: base_name.to_string(),
                     dimensions,
                     tier: default_tier.to_string(),
                     max_input_bytes,
+                    query_prefix,
                 });
             }
             // Tagged variant (e.g., nomic-embed-code:137m)
@@ -191,11 +198,13 @@ impl OllamaClient {
                     .unwrap_or(self.detect_dimensions(found)?);
                 let tier = found.split(':').nth(1).unwrap_or("custom");
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
+                let query_prefix = Self::resolve_query_prefix(config, found);
                 return Ok(ModelInfo {
                     name: found.clone(),
                     dimensions,
                     tier: tier.to_string(),
                     max_input_bytes,
+                    query_prefix,
                 });
             }
         }
@@ -275,6 +284,23 @@ impl OllamaClient {
         OllamaModelMeta {
             context_length,
             embedding_length,
+        }
+    }
+
+    /// Resolve query prefix from overrides, env vars, or model-name heuristic.
+    fn resolve_query_prefix(config: &OllamaConfig, model_name: &str) -> String {
+        // Priority: CLI query_prefix > env QUERY_PREFIX > auto-detect from model name
+        if let Some(ref v) = config.query_prefix {
+            return v.clone();
+        }
+        if let Ok(v) = std::env::var("VIBECHECK_QUERY_PREFIX") {
+            return v;
+        }
+        // Nomic models use "search_query: " prefix; others get no prefix
+        if model_name.starts_with("nomic-embed") {
+            DEFAULT_NOMIC_QUERY_PREFIX.to_string()
+        } else {
+            String::new()
         }
     }
 

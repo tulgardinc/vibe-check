@@ -2,7 +2,7 @@ use crate::error::VibecheckError;
 use crate::util::logger;
 
 /// Fallback truncation limit when model metadata is unavailable.
-/// Conservative for nomic-embed-code's 8192-token context at ~2 chars/token.
+/// Conservative default based on typical 8K-token embedding model contexts at ~2 chars/token.
 pub const DEFAULT_MAX_INPUT_BYTES: usize = 16_000;
 
 /// Conservative chars-per-token estimate for code.
@@ -18,6 +18,7 @@ pub struct ModelInfo {
     pub dimensions: usize,
     pub tier: String,
     pub max_input_bytes: usize,
+    pub query_prefix: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -26,6 +27,7 @@ pub struct OllamaConfig {
     pub host: Option<String>,
     pub context_length: Option<usize>,
     pub max_input_bytes: Option<usize>,
+    pub query_prefix: Option<String>,
 }
 
 pub trait Embedder {

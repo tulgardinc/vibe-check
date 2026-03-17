@@ -12,7 +12,7 @@ cargo test               # Run all tests
 cargo run -- index       # Run CLI via cargo
 ```
 
-**Prerequisites:** Rust toolchain, Ollama running locally with `nomic-embed-code` model.
+**Prerequisites:** Rust toolchain, Ollama running locally with an embedding model (auto-detected; prefers `nomic-embed-code`).
 
 **CLI usage (after build):**
 ```bash
@@ -33,7 +33,7 @@ Three-stage pipeline in `src/`:
 **Core pipelines** (`core/`): `index_pipeline.rs`, `query_pipeline.rs`, `scan_pipeline.rs`, `status_pipeline.rs`.
 
 **Data flow:**
-1. **Parser** (`parser/`) — tree-sitter extracts function-level chunks from TypeScript ASTs. Signature hashing in `signature.rs`.
+1. **Parser** (`parser/`) — tree-sitter extracts function-level chunks via `LanguageSupport` trait. `registry.rs` maps file extensions to languages, `typescript.rs` is the first implementation. Signature hashing in `signature.rs`.
 2. **Embedder** (`embedder/`) — Ollama HTTP client with auto-start, model detection.
 3. **Store** (`store/`) — SQLite + sqlite-vec. `db.rs` has schema, `index_store.rs` handles upsert and KNN cosine search, `file_tracker.rs` does incremental indexing.
 4. **Ignore** (`ignore/`) — `.vibecheck-ignore.json` stores pair-level false positive exclusions.
