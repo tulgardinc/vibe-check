@@ -164,8 +164,26 @@ fn run_index_cmd(
     }
 
     impl IndexProgress for CliProgress {
-        fn on_start(&self, total: usize) {
-            let bar = ProgressBar::new(total as u64);
+        fn on_indexing(&self) {
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_style(
+                ProgressStyle::default_spinner()
+                    .tick_strings(&[
+                        "Indexing functions and chunks",
+                        "Indexing functions and chunks.",
+                        "Indexing functions and chunks..",
+                        "Indexing functions and chunks...",
+                    ])
+                    .template("{wide_msg}")
+                    .unwrap(),
+            );
+            spinner.set_message("Indexing functions and chunks...");
+            spinner.enable_steady_tick(std::time::Duration::from_millis(300));
+            *self.bar.lock().unwrap_or_else(|e| e.into_inner()) = Some(spinner);
+        }
+
+        fn on_start(&self, total_batches: usize) {
+            let bar = ProgressBar::new(total_batches as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg} [{bar:30}] {pos}/{len} ({elapsed} elapsed, {eta} remaining)")
@@ -174,12 +192,17 @@ fn run_index_cmd(
             );
             bar.set_message("Embedding");
             bar.enable_steady_tick(std::time::Duration::from_millis(200));
-            *self.bar.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar);
+            // Replace the indexing spinner with the embedding bar
+            let mut guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref old) = *guard {
+                old.finish_and_clear();
+            }
+            *guard = Some(bar);
         }
 
-        fn on_progress(&self, count: usize) {
+        fn on_progress(&self) {
             if let Some(ref bar) = *self.bar.lock().unwrap_or_else(|e| e.into_inner()) {
-                bar.inc(count as u64);
+                bar.inc(1);
             }
         }
 

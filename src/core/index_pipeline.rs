@@ -23,12 +23,14 @@ use std::time::UNIX_EPOCH;
 /// Number of functions to embed per batch during indexing.
 const INDEX_EMBED_BATCH_SIZE: usize = 32;
 
-/// Reports progress during the embedding phase of indexing.
+/// Reports progress during the indexing pipeline.
 pub trait IndexProgress: Send {
-    /// Called before embedding starts. `total` is the number of functions to embed.
-    fn on_start(&self, _total: usize) {}
-    /// Called after each batch completes. `count` is the number embedded in this batch (a delta, not cumulative).
-    fn on_progress(&self, _count: usize) {}
+    /// Called before parsing/indexing phase begins.
+    fn on_indexing(&self) {}
+    /// Called before embedding starts. `total_batches` is the number of batches to embed.
+    fn on_start(&self, _total_batches: usize) {}
+    /// Called after each batch completes.
+    fn on_progress(&self) {}
     /// Called when all embedding is finished.
     fn on_done(&self) {}
 }
@@ -130,6 +132,10 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         changes.unchanged.len()
     ));
 
+    if let Some(ref progress) = options.progress {
+        progress.on_indexing();
+    }
+
     // Parse all added/modified files in parallel (no DB access).
     // Use cached content from change detection to avoid re-reading modified files.
     let files_to_process: Vec<&String> = changes
@@ -201,9 +207,10 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     if !unembedded.is_empty() {
         let total = unembedded.len();
         let vec_exists = vec_table_exists(&conn)?;
+        let total_batches = (total + INDEX_EMBED_BATCH_SIZE - 1) / INDEX_EMBED_BATCH_SIZE;
 
         if let Some(ref progress) = options.progress {
-            progress.on_start(total);
+            progress.on_start(total_batches);
         }
 
         let mut cancelled = false;
@@ -226,7 +233,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
             tx.commit()?;
 
             if let Some(ref progress) = options.progress {
-                progress.on_progress(batch.len());
+                progress.on_progress();
             }
         }
 
@@ -237,6 +244,9 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         if !cancelled {
             logger::success(&format!("Embedded {total} functions."));
         }
+    } else if let Some(ref progress) = options.progress {
+        // Clear the indexing spinner when there's nothing to embed
+        progress.on_done();
     }
 
     // Ensure vec0 virtual table exists for indexed KNN queries

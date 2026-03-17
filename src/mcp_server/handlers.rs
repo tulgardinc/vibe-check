@@ -90,7 +90,7 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
         IndexingStatus::Running { embedded, total } => {
             let done = embedded.load(Ordering::Relaxed);
             Ok(format!(
-                "Indexing in progress: {done}/{total} functions embedded. Call again to check progress."
+                "Indexing in progress: {done}/{total} batches embedded. Call again to check progress."
             ))
         }
         IndexingStatus::Done(ref msg) => {
@@ -129,16 +129,16 @@ pub fn handle_index(args: &Value, state: &Arc<Mutex<IndexingState>>) -> Result<S
             }
 
             impl IndexProgress for McpProgress {
-                fn on_start(&self, total: usize) {
+                fn on_start(&self, total_batches: usize) {
                     let mut s = lock_state(&self.state);
                     s.status = IndexingStatus::Running {
                         embedded: Arc::clone(&self.embedded),
-                        total,
+                        total: total_batches,
                     };
                 }
 
-                fn on_progress(&self, count: usize) {
-                    self.embedded.fetch_add(count, Ordering::Relaxed);
+                fn on_progress(&self) {
+                    self.embedded.fetch_add(1, Ordering::Relaxed);
                 }
             }
 
