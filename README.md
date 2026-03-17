@@ -4,16 +4,23 @@
 
 # Vibe Check
 
-Semantic code deduplication. Catches when new code reimplements something that already exists in the codebase — including logic buried inline inside other functions.
+Semantic code deduplication.
 
-Designed for LLM-assisted development, where models routinely rewrite utilities instead of reusing them. Works as a CLI tool or an MCP server that gives your AI assistant visibility into what's already been written.
+When working with LLMs they often end up rewriting utilities instead of reusing them.
+If you take a look at most vibecoded codebases you will quickly see utility functions, defined, redefined, inlined here and there... Vibe check works as a CLI tool or an MCP server to alert your agent that there is duplicated code, in or outside function bodies, that can either be removed or extracted.
+
+Pays off your tech debt early.
 
 ```
-$ vibec query src/utils/process.ts
+$ vibec scan
+info  Scanning 552 embedded functions...
 
-processItems (src/utils/process.ts:5)
-  handleItems (src/lib/items.ts:12) — similarity: 0.91 [embedding, jaccard: 0.62]
-  <block:88> in buildSummary (src/components/Report.tsx:88) — similarity: 0.84 [embedding, jaccard: 0.41]
+── IDENTICAL (3) ─────────────────────────────────────────
+  <block:309> in computeGraphDistances (src/server/ai/location-graph.ts:309, 7L)
+  <block:388> in computeShortestPath (src/server/ai/location-graph.ts:388, 8L)
+  99% similar (distance: 0.0040, jaccard: 1.00)
+
+...
 ```
 
 ## How it works
