@@ -160,7 +160,8 @@ Add to your project's `.mcp.json`:
       "type": "stdio",
       "command": "vibecheck-mcp",
       "env": {
-        "VIBECHECK_MODEL": "nomic-ai/nomic-embed-code"
+        "VIBECHECK_MODEL": "nomic-ai/nomic-embed-code",
+        "VIBECHECK_QUERY_PREFIX": "search_query: "
       }
     }
   }
