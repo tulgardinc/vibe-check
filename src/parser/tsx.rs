@@ -1,4 +1,8 @@
 use crate::parser::language::{LanguageSupport, NodeRole};
+use crate::parser::typescript::{
+    contains_function_value, extract_variable_function_name, find_variable_function_value,
+    strip_type_prefix,
+};
 use crate::parser::types::ParamInfo;
 use tree_sitter::Node;
 
@@ -10,54 +14,47 @@ static STOP_WORDS: &[&str] = &[
     "type", "enum", "true", "false", "null", "undefined",
 ];
 
-pub struct TypeScriptSupport;
+pub struct TsxSupport;
 
-impl LanguageSupport for TypeScriptSupport {
+impl LanguageSupport for TsxSupport {
     fn language(&self) -> tree_sitter::Language {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+        tree_sitter_typescript::LANGUAGE_TSX.into()
     }
 
     fn file_extensions(&self) -> &'static [&'static str] {
-        &["ts"]
+        &["tsx"]
     }
 
     fn is_excluded_file(&self, filename: &str) -> bool {
-        filename.ends_with(".d.ts")
-            || filename.ends_with(".test.ts")
-            || filename.ends_with(".spec.ts")
+        filename.ends_with(".d.tsx")
+            || filename.ends_with(".test.tsx")
+            || filename.ends_with(".spec.tsx")
     }
 
     fn classify_node(&self, node: Node) -> NodeRole {
         match node.kind() {
-            // Direct function definitions
             "function_declaration"
             | "generator_function_declaration"
             | "method_definition"
             | "arrow_function"
             | "function_expression" => NodeRole::Function,
 
-            // Variable declarations wrapping a function value
             "lexical_declaration" | "variable_declaration"
                 if contains_function_value(node) =>
             {
                 NodeRole::Function
             }
 
-            // Control flow — only block-eligible parents
             "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
             | "do_statement" | "try_statement" => NodeRole::BlockParent,
 
-            // Control flow — not a block parent
             "switch_statement" => NodeRole::ControlFlow,
 
-            // Statement block
             "statement_block" => NodeRole::Block,
 
-            // Type-system nodes (skipped during token collection)
             "type_annotation" | "type_arguments" | "type_parameters" | "as_expression"
             | "satisfies_expression" | "return_type" => NodeRole::TypeAnnotation,
 
-            // Export wrappers
             "export_statement" | "export_default_declaration" => NodeRole::Export,
 
             _ => NodeRole::Other,
@@ -73,12 +70,10 @@ impl LanguageSupport for TypeScriptSupport {
     }
 
     fn extract_function_name(&self, node: Node, source: &[u8]) -> Option<String> {
-        // Variable-wrapped function: dig into declarator for the name
         if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
             return extract_variable_function_name(node, source);
         }
 
-        // Direct function: use the name field
         let name_node = node.child_by_field_name("name")?;
         let text = name_node.utf8_text(source).unwrap_or("");
         if text.is_empty() {
@@ -144,67 +139,5 @@ impl LanguageSupport for TypeScriptSupport {
             return None;
         }
         find_variable_function_value(node)
-    }
-}
-
-/// Check if a variable declaration contains a function value (without needing source bytes).
-pub(crate) fn contains_function_value(node: Node) -> bool {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "variable_declarator" {
-            if let Some(value) = child.child_by_field_name("value") {
-                let kind = value.kind();
-                if kind == "arrow_function" || kind == "function_expression" {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Find the function node inside a variable declaration.
-pub(crate) fn find_variable_function_value(node: Node) -> Option<Node> {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "variable_declarator" {
-            if let Some(value) = child.child_by_field_name("value") {
-                let kind = value.kind();
-                if kind == "arrow_function" || kind == "function_expression" {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Extract the variable name from a declaration like `const foo = () => {}`.
-pub(crate) fn extract_variable_function_name(node: Node, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "variable_declarator" {
-            if let Some(value) = child.child_by_field_name("value") {
-                let kind = value.kind();
-                if kind == "arrow_function" || kind == "function_expression" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        let text = name_node.utf8_text(source).unwrap_or("");
-                        if !text.is_empty() {
-                            return Some(text.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn strip_type_prefix(text: &str) -> Option<String> {
-    let trimmed = text.strip_prefix(':').unwrap_or(text).trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
     }
 }
