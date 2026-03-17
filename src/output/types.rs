@@ -178,7 +178,8 @@ pub fn similarity_tier(distance: f64) -> &'static str {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusResult {
     pub exists: bool,
     pub db_path: String,
@@ -195,7 +196,8 @@ pub struct StatusResult {
     pub file_pair_exclusions: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexResult {
     pub files_scanned: usize,
     pub functions_indexed: usize,
@@ -227,4 +229,20 @@ pub fn format_display_name(
         (Some(ChunkType::Block), Some(ctx)) => format!("{name} in {ctx}"),
         _ => name.to_string(),
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DryRunResult {
+    pub files: Vec<String>,
+    pub file_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludeResult {
+    pub message: String,
+    pub total_exclusions: usize,
+    pub total_file_exclusions: usize,
+    pub total_file_pair_exclusions: usize,
 }

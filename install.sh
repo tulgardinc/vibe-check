@@ -60,7 +60,7 @@ if [ ${#TOOLS[@]} -eq 0 ]; then
   info "Binaries installed. To also set up editor skills, re-run with tool names:"
   echo "    curl -fsSL https://raw.githubusercontent.com/$REPO/release/install.sh | bash -s -- claude-code cursor"
   echo ""
-  echo "    Supported: claude-code, cursor, opencode"
+  echo "    Supported: claude-code, claude-desktop, cursor, opencode"
   exit 0
 fi
 
@@ -108,26 +108,34 @@ for TOOL in "${TOOLS[@]}"; do
 
   case "$TOOL" in
     claude-code|claude)
-      mkdir -p ".claude/skills/vibe-check"
-      curl -fsSL "$SKILL_URL" -o ".claude/skills/vibe-check/SKILL.md"
-      ok "Skill -> .claude/skills/vibe-check/SKILL.md"
-      add_mcp_config ".mcp.json"
+      mkdir -p "$HOME/.claude/skills/vibe-check"
+      curl -fsSL "$SKILL_URL" -o "$HOME/.claude/skills/vibe-check/SKILL.md"
+      ok "Skill -> ~/.claude/skills/vibe-check/SKILL.md"
+      add_mcp_config "$HOME/.claude.json"
       echo ""
       info "Run /vibecheck in Claude Code to get started"
       ;;
+    claude-desktop)
+      if [ "$PLATFORM" = "darwin" ]; then
+        DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+      else
+        DESKTOP_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json"
+      fi
+      add_mcp_config "$DESKTOP_CONFIG"
+      ;;
     cursor)
-      mkdir -p ".cursor/rules"
-      curl -fsSL "$SKILL_URL" -o ".cursor/rules/vibecheck.md"
-      ok "Skill -> .cursor/rules/vibecheck.md"
-      add_mcp_config ".cursor/mcp.json"
+      mkdir -p "$HOME/.cursor/rules"
+      curl -fsSL "$SKILL_URL" -o "$HOME/.cursor/rules/vibecheck.md"
+      ok "Skill -> ~/.cursor/rules/vibecheck.md"
+      add_mcp_config "$HOME/.cursor/mcp.json"
       ;;
     opencode)
-      curl -fsSL "$SKILL_URL" -o "VIBECHECK.md"
-      ok "Skill -> VIBECHECK.md"
-      add_mcp_config ".mcp.json"
+      curl -fsSL "$SKILL_URL" -o "$HOME/VIBECHECK.md"
+      ok "Skill -> ~/VIBECHECK.md"
+      add_mcp_config "$HOME/.mcp.json"
       ;;
     *)
-      warn "Unknown tool: $TOOL (supported: claude-code, cursor, opencode). Skipping."
+      warn "Unknown tool: $TOOL (supported: claude-code, claude-desktop, cursor, opencode). Skipping."
       ;;
   esac
 done

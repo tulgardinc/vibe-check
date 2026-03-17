@@ -47,7 +47,7 @@ if (-not $Tools -or $Tools.Count -eq 0) {
     Info "Binaries installed. To also set up editor skills, re-run with tool names:"
     Write-Host "    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/$Repo/release/install.ps1))) claude-code cursor"
     Write-Host ""
-    Write-Host "    Supported: claude-code, cursor, opencode"
+    Write-Host "    Supported: claude-code, claude-desktop, cursor, opencode"
     exit 0
 }
 
@@ -87,32 +87,40 @@ function Add-McpConfig($McpFile) {
     }
 }
 
+$Home_ = $env:USERPROFILE
+
 foreach ($Tool in $Tools) {
     Write-Host ""
     Info "Setting up for $Tool..."
 
     switch -Regex ($Tool) {
         '^(claude-code|claude)$' {
-            New-Item -ItemType Directory -Path '.claude/skills/vibe-check' -Force | Out-Null
-            Invoke-WebRequest -Uri $SkillUrl -OutFile '.claude/skills/vibe-check/SKILL.md' -UseBasicParsing
-            Ok "Skill -> .claude/skills/vibe-check/SKILL.md"
-            Add-McpConfig '.mcp.json'
+            $skillDir = Join-Path $Home_ '.claude\skills\vibe-check'
+            New-Item -ItemType Directory -Path $skillDir -Force | Out-Null
+            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $skillDir 'SKILL.md') -UseBasicParsing
+            Ok "Skill -> ~/.claude/skills/vibe-check/SKILL.md"
+            Add-McpConfig (Join-Path $Home_ '.claude.json')
             Write-Host ""
             Info "Run /vibecheck in Claude Code to get started"
         }
+        '^claude-desktop$' {
+            $desktopConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+            Add-McpConfig $desktopConfig
+        }
         '^cursor$' {
-            New-Item -ItemType Directory -Path '.cursor/rules' -Force | Out-Null
-            Invoke-WebRequest -Uri $SkillUrl -OutFile '.cursor/rules/vibecheck.md' -UseBasicParsing
-            Ok "Skill -> .cursor/rules/vibecheck.md"
-            Add-McpConfig '.cursor/mcp.json'
+            $cursorRules = Join-Path $Home_ '.cursor\rules'
+            New-Item -ItemType Directory -Path $cursorRules -Force | Out-Null
+            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $cursorRules 'vibecheck.md') -UseBasicParsing
+            Ok "Skill -> ~/.cursor/rules/vibecheck.md"
+            Add-McpConfig (Join-Path $Home_ '.cursor\mcp.json')
         }
         '^opencode$' {
-            Invoke-WebRequest -Uri $SkillUrl -OutFile 'VIBECHECK.md' -UseBasicParsing
-            Ok "Skill -> VIBECHECK.md"
-            Add-McpConfig '.mcp.json'
+            Invoke-WebRequest -Uri $SkillUrl -OutFile (Join-Path $Home_ 'VIBECHECK.md') -UseBasicParsing
+            Ok "Skill -> ~/VIBECHECK.md"
+            Add-McpConfig (Join-Path $Home_ '.mcp.json')
         }
         default {
-            Warn "Unknown tool: $Tool (supported: claude-code, cursor, opencode). Skipping."
+            Warn "Unknown tool: $Tool (supported: claude-code, claude-desktop, cursor, opencode). Skipping."
         }
     }
 }

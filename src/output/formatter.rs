@@ -1,4 +1,4 @@
-use crate::output::types::{QueryResult, StatusResult, format_display_name, format_jaccard_suffix, format_similarity};
+use crate::output::types::{IndexResult, QueryResult, StatusResult, format_display_name, format_jaccard_suffix, format_similarity};
 
 pub fn format_json(result: &QueryResult) -> String {
     serde_json::to_string_pretty(result).unwrap_or_else(|e| {
@@ -48,6 +48,20 @@ pub fn format_human(result: &QueryResult) -> String {
     ));
 
     out
+}
+
+pub fn format_index_json(result: &IndexResult) -> String {
+    serde_json::to_string_pretty(result).unwrap_or_else(|e| {
+        eprintln!("Warning: failed to serialize index result: {e}");
+        "{}".into()
+    })
+}
+
+pub fn format_status_json(result: &StatusResult) -> String {
+    serde_json::to_string_pretty(result).unwrap_or_else(|e| {
+        eprintln!("Warning: failed to serialize status result: {e}");
+        "{}".into()
+    })
 }
 
 pub fn format_status_human(result: &StatusResult) -> String {

@@ -46,10 +46,9 @@ ollama pull nomic-embed-code
 
 ## Install
 
-One-liner that downloads the binaries, adds them to your PATH, and sets up the skill + MCP config for your editor. Run from your project directory:
+One-liner that downloads the binaries, adds them to your PATH, and sets up the skill + MCP config globally for your editor.
 
-Provide one or more of as arguments `claude-code`, `cursor`, `opencode`
-Omit the tool name to install binaries only.
+Pass one or more tool names: `claude-code`, `claude-desktop`, `cursor`, `opencode`. Omit to install binaries only.
 
 **macOS / Linux:**
 
@@ -63,12 +62,17 @@ curl -fsSL https://raw.githubusercontent.com/tulgardinc/vibe-check/release/insta
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.ps1))) claude-code
 ```
 
+Multiple tools at once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tulgardinc/vibe-check/release/install.sh | bash -s -- claude-code claude-desktop cursor
+```
 
 The installer auto-detects your platform and architecture. It installs:
 - `vibec` — CLI tool
 - `vibecheck-mcp` — MCP server
-- [`SKILL.md`](SKILL.md) — AI skill with setup guide and workflow reference (placed in the right location for your editor)
-- `.mcp.json` — MCP server configuration (created or updated)
+- [`SKILL.md`](SKILL.md) — AI skill with setup guide and workflow reference (placed in the global location for your editor)
+- MCP server configuration (created or merged into your editor's global config)
 
 <details>
 <summary><b>Build from source</b></summary>

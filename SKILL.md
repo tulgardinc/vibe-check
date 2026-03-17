@@ -12,13 +12,13 @@ description: >
   errors, configuration changes, or documentation-only edits.
 ---
 
-# Vibecheck Setup & Workflow Guide
+# Vibecheck — MCP Skill Guide
 
-You are helping the user set up and understand vibecheck — a semantic code deduplication tool.
+You have access to vibecheck via MCP tools. Use them to find and manage duplicated code.
 
 ## Step 1: Environment Configuration
 
-Check if a `.env` file exists at the project root. If it does not, walk the user through creating one by asking about their preferences for each variable below. Ask all questions upfront in a single message, providing the defaults so they can just confirm or override:
+Check if a `.env` file exists at the project root. If not, ask the user about their preferences for the variables below — all at once, showing the defaults so they can confirm or override:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
@@ -29,49 +29,63 @@ Check if a `.env` file exists at the project root. If it does not, walk the user
 | `VIBECHECK_CONTEXT_LENGTH` | Context length in tokens | Model default |
 | `VIBECHECK_MAX_INPUT_BYTES` | Max input bytes for truncation | 16,000 |
 
-Only include variables in the `.env` where the user wants a non-default value. If they're happy with all defaults, still create the `.env` with a comment header explaining the available options for future reference.
-
-If a `.env` already exists, read it and confirm the current settings with the user, offering to update anything.
+Only include non-default values. If all defaults are fine, create the `.env` with a comment header listing the options for future reference. If a `.env` already exists, read it and confirm with the user.
 
 ## Step 2: Workflow Guide
 
-After the `.env` is handled, explain the recommended vibecheck workflow — both CLI and MCP. Cover each tool with its benefits, drawbacks, and when to use it:
+After the environment is set up, explain the recommended workflow using the MCP tools:
 
-### `vibec index` / `vibecheck_index`
-- **What it does:** Parses all supported source files with tree-sitter, generates embeddings via Ollama, and stores them in a local SQLite database.
-- **When to use:** After large changes — merging a big PR, finishing a refactor, pulling in new code. Keeps the index fresh so query/scan results stay relevant.
+### `vibecheck_index` — Build or update the index
+- **What it does:** Parses source files with tree-sitter, generates embeddings via Ollama, stores them in SQLite. Runs in the background — call it again to check progress.
+- **When to use:** After large changes — merging a PR, finishing a refactor, pulling new code. Keeps results relevant.
+- **Parameters:** `path` (directory), `force` (full re-index), plus Ollama overrides (`model`, `ollamaHost`, `contextLength`, `maxInputBytes`, `queryPrefix`, `dimensions`, `db`).
+- **Caveats:**
+  - **Indexing time:** Can take minutes on large codebases. Embedding is the bottleneck (~2s per function). Incremental re-indexes are much faster — only changed files are re-embedded. This is a good time to work on other tasks while it runs in the background.
+  - **Context length:** Models with short context windows will truncate long functions before embedding, reducing match quality. Tune with `contextLength` and `maxInputBytes`, or use a model with a larger window.
+- **Tips:** Use `force: true` to rebuild after changing models. Use `vibecheck_index_stop` to pause — progress is saved, call `vibecheck_index` again to resume.
+
+### `vibecheck_query` — Find similar functions to new code
+- **What it does:** Parses and embeds the input, then finds the most similar indexed functions using KNN cosine search + Jaccard re-ranking. Returns JSON with candidates, distances, and similarity scores.
+- **When to use:** Targeted checks on files you're actively working on. Best signal-to-noise ratio — use it when writing new code or reviewing a file.
+- **Parameters:** `file` (path) or `source` (raw code), `topK` (default 5), `threshold` (default 0.3), plus Ollama overrides.
+- **Benefits:** Fast — only embeds the query. Focused results.
+- **Drawback:** Only finds duplicates relative to what's indexed. If the index is stale, results may miss recent code. Check `vibecheck_status` first.
+
+### `vibecheck_scan` — Find all similar pairs across the codebase
+- **What it does:** Compares every indexed function against every other to find all similar pairs. Returns JSON grouped by similarity tier.
+- **When to use:** Periodic audits — before a release, after a large feature, or as a health check. Not for daily use.
+- **Parameters:** `topN` (default 50), `threshold` (default 0.25), `db`.
+- **Benefits:** Comprehensive — catches duplication you wouldn't think to look for.
 - **Drawbacks:**
-  - **Indexing time:** Can take a long time on large codebases. Embedding is the bottleneck — each function/block requires an Ollama round-trip. On a first index of a large project, expect minutes to tens of minutes. Incremental re-indexes are much faster since only changed files are re-embedded.
-  - **Context length:** If your embedding model has a short context window, long functions will be truncated before embedding, which can reduce match quality for large functions. The `VIBECHECK_CONTEXT_LENGTH` and `VIBECHECK_MAX_INPUT_BYTES` variables control this. If you're seeing poor matches on long functions, consider a model with a larger context window or increasing these limits if your model supports it.
-  - **Memory/CPU:** Ollama embedding models vary in resource usage. Lighter models are faster but may produce lower-quality embeddings.
-- **Tips:** Use `--force` to rebuild from scratch if you change models or suspect index corruption. Use `vibecheck_index_stop` (MCP) to pause a long-running index — progress is saved and you can resume later.
+  - **Slow on large codebases.** O(n) queries where n = indexed functions.
+  - **Noisy.** More results means more false positives. Use exclusions to keep signal high.
 
-### `vibec query <file>` / `vibecheck_query`
-- **What it does:** Parses and embeds the given file (or source code), then finds the most similar functions already in the index using KNN cosine search + Jaccard re-ranking.
-- **When to use:** For targeted checks on the specific files you're working on. This is the highest signal-to-noise ratio tool — use it when writing new code or reviewing a specific file.
-- **Benefits:** Fast (only embeds the query file), focused results, great for catching duplication as you write.
-- **Drawbacks:** Only finds duplicates relative to what's already indexed. If the index is stale, results may miss recent code.
-- **Tips:** Adjust `--threshold` (lower = stricter) and `--top-k` to tune results. The MCP version accepts raw `source` code too, so you can check snippets without saving to a file.
+### `vibecheck_status` — Check index health
+- **What it does:** Reports database size, model, dimensions, function/file counts, last indexed time, and exclusion counts.
+- **When to use:** Before running query/scan, to check if a re-index is needed.
+- **Parameters:** `db`.
 
-### `vibec scan` / `vibecheck_scan`
-- **What it does:** Compares every indexed function against every other indexed function to find all similar pairs across the entire codebase.
-- **When to use:** Periodic audits — before a release, after a large feature lands, or as a codebase health check. Not for daily use.
-- **Benefits:** Comprehensive — catches duplication you wouldn't think to look for. Great for finding systemic patterns.
-- **Drawbacks:**
-  - **Slow on large codebases:** O(n) KNN queries where n = number of indexed functions. A codebase with 500+ functions will take a while.
-  - **Noisy results:** More results means more false positives. Use exclusions aggressively to keep signal high.
-- **Tips:** Use `--threshold` to filter weak matches. Use `--top-n` to limit output. Add exclusions for intentional duplication (test mocks, generated code, etc.) via `vibecheck_add_exclusion`, `vibecheck_add_file_exclusion`, `vibecheck_add_file_pair_exclusion`, or `vibecheck_add_file_group_exclusion`.
+### Exclusion tools — Suppress false positives
 
-### `vibec status` / `vibecheck_status`
-- **What it does:** Shows index health — number of files, functions, embedding model, and whether the index is up to date.
-- **When to use:** To check if you need to re-index before running query/scan.
+When results include intentional duplication (test mocks, generated code, structural patterns), exclude them so future results are cleaner:
+
+- **`vibecheck_add_exclusion`** — Exclude a specific function pair. Requires both sides' `queryFunction`, `queryPath`, `querySignatureHash`, `candidateFunction`, `candidatePath`, `candidateSignatureHash`, and a `reason`. Use the `signatureHash` values from query/scan results.
+- **`vibecheck_add_file_exclusion`** — Exclude a file or glob pattern entirely (e.g. `pattern: "src/generated/**"`). Requires `pattern` and `reason`.
+- **`vibecheck_add_file_pair_exclusion`** — Exclude all comparisons between two files. Requires `fileA`, `fileB`, and `reason`.
+- **`vibecheck_add_file_group_exclusion`** — Exclude all pairwise comparisons in a group of files. Requires `files` (array, at least 2) and `reason`. Expands to all pairs automatically.
+
+### Important: gitignore
+The `.vibecheck.db` file is a local index and should not be committed. If it's not already in `.gitignore`, add it:
+```
+.vibecheck.db
+```
 
 ### Common issues
-- **Model mismatch warning:** If you change your embedding model after indexing, vibecheck will warn you. Re-index with `--force` to rebuild with the new model.
-- **Ollama not running:** vibecheck will attempt to auto-start Ollama, but if it fails, make sure `ollama serve` is running.
-- **Poor match quality on long functions:** Increase `VIBECHECK_MAX_INPUT_BYTES` or `VIBECHECK_CONTEXT_LENGTH`, or use a model with a larger context window.
+- **Model mismatch warning:** Re-index with `force: true` after changing models.
+- **Ollama not running:** vibecheck auto-starts Ollama, but if it fails, ensure `ollama serve` is running.
+- **Poor matches on long functions:** Increase `maxInputBytes` or `contextLength`, or use a model with a larger context window.
 
-### Recommended daily workflow
+### Recommended workflow
 1. **Index** after pulling or merging significant changes
 2. **Query** the files you're actively editing — catch duplication as you write
 3. **Scan** periodically for a full audit

@@ -6,7 +6,7 @@
       "pattern": "tests/**",
       "reason": "Test files are expected to have similar structure and mock implementations; not useful duplication targets",
       "added": "2026-03-17"
-    }
+    },
   ],
   "filePairExclusions": [
     {
