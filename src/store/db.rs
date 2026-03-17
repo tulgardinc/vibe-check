@@ -157,6 +157,14 @@ pub fn run_migrations_for_test(conn: &Connection) {
     run_migrations(conn).unwrap();
 }
 
+/// Drop the `vec_functions` virtual table if it exists.  Used when `--force`
+/// re-indexes with a model whose embedding dimensions differ from the existing
+/// table, since vec0 column widths are fixed at creation time.
+pub fn drop_vec_table(conn: &Connection) -> Result<(), VibecheckError> {
+    conn.execute_batch("DROP TABLE IF EXISTS vec_functions")?;
+    Ok(())
+}
+
 /// Create the `vec_functions` virtual table for indexed KNN queries if it does
 /// not already exist.  Must be called once the embedding dimension is known
 /// (i.e. after the first successful embedding run).  Existing embeddings in

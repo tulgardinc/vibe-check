@@ -101,14 +101,17 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     // Check model mismatch
     if let Some(stored_model) = get_meta_value(&conn, "model_name")?
         && stored_model != embedder.model_name()
-        && !options.force
     {
-        return Err(VibecheckError::Index(format!(
-            "Model mismatch: index was built with '{}' but current model is '{}'. \
-             Use --force to re-index with the new model.",
-            stored_model,
-            embedder.model_name()
-        )));
+        if !options.force {
+            return Err(VibecheckError::Index(format!(
+                "Model mismatch: index was built with '{}' but current model is '{}'. \
+                 Use --force to re-index with the new model.",
+                stored_model,
+                embedder.model_name()
+            )));
+        }
+        // Force re-index: drop vec table so it gets recreated with the new dimensions
+        crate::store::db::drop_vec_table(&conn)?;
     }
 
     // Check signature hash version
