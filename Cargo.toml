@@ -16,7 +16,7 @@ tree-sitter = "0.24"
 tree-sitter-typescript = "0.23"
 rusqlite = { version = "0.33", features = ["bundled", "blob"] }
 sqlite-vec = "0.1.6"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
