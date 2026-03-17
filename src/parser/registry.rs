@@ -1,5 +1,6 @@
 use crate::parser::javascript::JavaScriptSupport;
 use crate::parser::language::LanguageSupport;
+use crate::parser::python::PythonSupport;
 use crate::parser::rust::RustSupport;
 use crate::parser::tsx::TsxSupport;
 use crate::parser::typescript::TypeScriptSupport;
@@ -7,8 +8,15 @@ use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-static LANGUAGES: LazyLock<Vec<&'static dyn LanguageSupport>> =
-    LazyLock::new(|| vec![&TypeScriptSupport, &TsxSupport, &JavaScriptSupport, &RustSupport]);
+static LANGUAGES: LazyLock<Vec<&'static dyn LanguageSupport>> = LazyLock::new(|| {
+    vec![
+        &TypeScriptSupport,
+        &TsxSupport,
+        &JavaScriptSupport,
+        &RustSupport,
+        &PythonSupport,
+    ]
+});
 
 /// Find the language support for a given file path, based on extension.
 pub fn language_for_file(path: &str) -> Option<&'static dyn LanguageSupport> {
@@ -72,7 +80,7 @@ mod tests {
 
     #[test]
     fn language_for_unknown_extension() {
-        assert!(language_for_file("main.py").is_none());
+        assert!(language_for_file("main.py").is_some());
         assert!(language_for_file("style.css").is_none());
     }
 

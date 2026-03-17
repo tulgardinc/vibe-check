@@ -1,6 +1,7 @@
 pub mod chunker;
 pub mod javascript;
 pub mod language;
+pub mod python;
 pub mod registry;
 pub mod rust;
 pub mod signature;
