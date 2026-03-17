@@ -153,9 +153,7 @@ impl OllamaClient {
                     )));
                 }
                 let meta = self.show_model(&name);
-                let dimensions = meta
-                    .embedding_length
-                    .unwrap_or(self.detect_dimensions(&name)?);
+                let dimensions = self.resolve_dimensions(config, &meta, &name)?;
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 let query_prefix = Self::resolve_query_prefix(config, &name);
                 Ok(ModelInfo {
@@ -177,9 +175,7 @@ impl OllamaClient {
             // Exact match or :latest tag
             if names.iter().any(|n| n == *base_name || n == &format!("{base_name}:latest")) {
                 let meta = self.show_model(base_name);
-                let dimensions = meta
-                    .embedding_length
-                    .unwrap_or(self.detect_dimensions(base_name)?);
+                let dimensions = self.resolve_dimensions(config, &meta, base_name)?;
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 let query_prefix = Self::resolve_query_prefix(config, base_name);
                 return Ok(ModelInfo {
@@ -193,9 +189,7 @@ impl OllamaClient {
             // Tagged variant (e.g., nomic-embed-code:137m)
             if let Some(found) = names.iter().find(|n| n.starts_with(&format!("{base_name}:"))) {
                 let meta = self.show_model(found);
-                let dimensions = meta
-                    .embedding_length
-                    .unwrap_or(self.detect_dimensions(found)?);
+                let dimensions = self.resolve_dimensions(config, &meta, found)?;
                 let tier = found.split(':').nth(1).unwrap_or("custom");
                 let max_input_bytes = Self::resolve_max_input_bytes(config, &meta);
                 let query_prefix = Self::resolve_query_prefix(config, found);
@@ -285,6 +279,29 @@ impl OllamaClient {
             context_length,
             embedding_length,
         }
+    }
+
+    /// Resolve dimensions from overrides, env vars, metadata, or probe embedding.
+    fn resolve_dimensions(
+        &self,
+        config: &OllamaConfig,
+        meta: &OllamaModelMeta,
+        model_name: &str,
+    ) -> Result<usize, VibecheckError> {
+        // Priority: CLI dimensions > env DIMENSIONS > metadata > probe
+        if let Some(v) = config.dimensions {
+            return Ok(v);
+        }
+        if let Some(v) = std::env::var("VIBECHECK_DIMENSIONS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            return Ok(v);
+        }
+        if let Some(v) = meta.embedding_length {
+            return Ok(v);
+        }
+        self.detect_dimensions(model_name)
     }
 
     /// Resolve query prefix from overrides, env vars, or model-name heuristic.

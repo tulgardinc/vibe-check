@@ -28,6 +28,7 @@ pub struct OllamaConfig {
     pub context_length: Option<usize>,
     pub max_input_bytes: Option<usize>,
     pub query_prefix: Option<String>,
+    pub dimensions: Option<usize>,
 }
 
 pub trait Embedder {

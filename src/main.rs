@@ -38,6 +38,10 @@ struct Cli {
     #[arg(long, global = true)]
     query_prefix: Option<String>,
 
+    /// Override embedding dimensions (overrides VIBECHECK_DIMENSIONS env var)
+    #[arg(long, global = true)]
+    dimensions: Option<usize>,
+
     /// Database file path
     #[arg(long, global = true)]
     db: Option<String>,
@@ -106,6 +110,7 @@ fn main() {
         context_length: cli.context_length,
         max_input_bytes: cli.max_input_bytes,
         query_prefix: cli.query_prefix,
+        dimensions: cli.dimensions,
     };
     let db = cli.db;
 

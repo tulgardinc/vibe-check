@@ -17,6 +17,7 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "contextLength": { "type": "number", "description": "Override model context length in tokens" },
                     "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
                     "queryPrefix": { "type": "string", "description": "Override query prefix prepended to search inputs" },
+                    "dimensions": { "type": "number", "description": "Override embedding dimensions" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),
@@ -34,6 +35,7 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "contextLength": { "type": "number", "description": "Override model context length in tokens" },
                     "maxInputBytes": { "type": "number", "description": "Override max input bytes for truncation" },
                     "queryPrefix": { "type": "string", "description": "Override query prefix prepended to search inputs" },
+                    "dimensions": { "type": "number", "description": "Override embedding dimensions" },
                     "db": { "type": "string", "description": "Override database file path" }
                 }
             }),
