@@ -2,7 +2,11 @@
   "mcpServers": {
     "vibecheck": {
       "type": "stdio",
-      "command": "vibecheck-mcp"
+      "command": "vibecheck-mcp",
+      "env": {
+        "VIBECHECK_MODEL": "nomic-ai/nomic-embed-code",
+        "VIBECHECK_QUERY_PREFIX": "search_query: "
+      }
     }
   }
 }

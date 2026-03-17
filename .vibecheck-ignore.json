@@ -1,17 +1,73 @@
 {
   "version": 1,
   "exclusions": [],
-  "fileExclusions": [],
+  "fileExclusions": [
+    {
+      "pattern": "tests/**",
+      "reason": "Test files are expected to have similar structure and mock implementations; not useful duplication targets",
+      "added": "2026-03-17"
+    }
+  ],
   "filePairExclusions": [
-    { "a": "src/parser/typescript.rs", "b": "src/parser/tsx.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/typescript.rs", "b": "src/parser/javascript.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/typescript.rs", "b": "src/parser/rust.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/typescript.rs", "b": "src/parser/python.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/tsx.rs", "b": "src/parser/javascript.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/tsx.rs", "b": "src/parser/rust.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/tsx.rs", "b": "src/parser/python.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/javascript.rs", "b": "src/parser/rust.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/javascript.rs", "b": "src/parser/python.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" },
-    { "a": "src/parser/rust.rs", "b": "src/parser/python.rs", "reason": "language parsers share LanguageSupport trait structure", "added": "2026-03-17" }
+    {
+      "a": "src/parser/typescript.rs",
+      "b": "src/parser/tsx.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/typescript.rs",
+      "b": "src/parser/javascript.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/typescript.rs",
+      "b": "src/parser/rust.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/typescript.rs",
+      "b": "src/parser/python.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/tsx.rs",
+      "b": "src/parser/javascript.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/tsx.rs",
+      "b": "src/parser/rust.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/tsx.rs",
+      "b": "src/parser/python.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/javascript.rs",
+      "b": "src/parser/rust.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/javascript.rs",
+      "b": "src/parser/python.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    },
+    {
+      "a": "src/parser/rust.rs",
+      "b": "src/parser/python.rs",
+      "reason": "language parsers share LanguageSupport trait structure",
+      "added": "2026-03-17"
+    }
   ]
 }

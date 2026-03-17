@@ -48,37 +48,53 @@ ollama pull nomic-embed-code
 
 Download the latest binary for your platform:
 
-**macOS (Apple Silicon)**
+<details>
+<summary><b>macOS (Apple Silicon)</b></summary>
+
 ```bash
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-aarch64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-aarch64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
 ```
+</details>
 
-**macOS (Intel)**
+<details>
+<summary><b>macOS (Intel)</b></summary>
+
 ```bash
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-darwin-x86_64 -o /usr/local/bin/vibec && chmod +x /usr/local/bin/vibec
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-darwin-x86_64 -o /usr/local/bin/vibecheck-mcp && chmod +x /usr/local/bin/vibecheck-mcp
 ```
+</details>
 
-**Linux (x86_64)**
+<details>
+<summary><b>Linux (x86_64)</b></summary>
+
 ```bash
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-x86_64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-x86_64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
 ```
+</details>
 
-**Linux (aarch64)**
+<details>
+<summary><b>Linux (aarch64)</b></summary>
+
 ```bash
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-linux-aarch64 -o ~/.local/bin/vibec && chmod +x ~/.local/bin/vibec
 curl -L https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-linux-aarch64 -o ~/.local/bin/vibecheck-mcp && chmod +x ~/.local/bin/vibecheck-mcp
 ```
+</details>
 
-**Windows (x86_64)**
+<details>
+<summary><b>Windows (x86_64)</b></summary>
+
 ```powershell
 Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibec-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibec.exe"
 Invoke-WebRequest -Uri https://github.com/tulgardinc/vibe-check/releases/latest/download/vibecheck-mcp-windows-x86_64.exe -OutFile "$env:USERPROFILE\.local\bin\vibecheck-mcp.exe"
 ```
+</details>
 
-### Build from source
+<details>
+<summary><b>Build from source</b></summary>
 
 ```bash
 git clone https://github.com/tulgardinc/vibe-check.git
@@ -89,6 +105,26 @@ cargo build --release
 Binaries are in `target/release/`:
 - `vibec` — CLI
 - `vibecheck-mcp` — MCP server
+</details>
+
+## Recommended workflow
+
+1. **Index after large changes** — re-index whenever you merge a big PR, finish a refactor, or pull in new code. This keeps the index fresh so results stay relevant.
+   ```bash
+   vibec index
+   ```
+
+2. **Use `query` for targeted checks** — instead of scanning the entire codebase, point `query` at the specific files or snippets you're working on. This gives a much better signal-to-noise ratio than a full scan.
+   ```bash
+   vibec query src/utils/newHelper.ts
+   ```
+
+3. **Use `scan` for periodic audits** — run a full scan occasionally (e.g. before a release or after a large feature lands) to catch duplication that slipped through.
+   ```bash
+   vibec scan
+   ```
+
+4. **Exclude false positives** — when results include intentional duplication (test mocks, generated code, etc.), add exclusions so future results are cleaner.
 
 ## CLI usage
 

@@ -114,6 +114,10 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
                 continue;
             }
 
+            if file_matcher.is_excluded(std::path::Path::new(&neighbor.file_path)) {
+                continue;
+            }
+
             let jaccard = jaccard_similarity(&func.tokens, &neighbor.tokens);
             let combined = combined_score(*distance, jaccard, DEFAULT_RERANK_ALPHA);
 
