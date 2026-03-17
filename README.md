@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="VibeCheckIcon.svg" alt="vibecheck" width="128" />
+  <img src="VibeCheckIcon.svg" alt="vibecheck" width="256" />
 </p>
 
 # Vibe Check
