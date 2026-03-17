@@ -4,12 +4,10 @@
 
 # Vibe Check
 
-Semantic code deduplication.
+Semantic code deduplication. LLMs often end up rewriting utilities instead of reusing them.
+Vibe check works as a CLI tool or an MCP server to alert your agent that there is duplicated code that can either be removed or extracted.
 
-When working with LLMs they often end up rewriting utilities instead of reusing them.
-If you take a look at most vibecoded codebases you will quickly see utility functions, defined, redefined, inlined here and there... Vibe check works as a CLI tool or an MCP server to alert your agent that there is duplicated code, in or outside function bodies, that can either be removed or extracted.
-
-Pays off your tech debt early.
+Pay off your tech debt early.
 
 ```
 $ vibec scan
