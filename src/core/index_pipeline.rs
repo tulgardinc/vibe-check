@@ -25,8 +25,6 @@ const INDEX_EMBED_BATCH_SIZE: usize = 32;
 
 /// Reports progress during the indexing pipeline.
 pub trait IndexProgress: Send {
-    /// Called before parsing/indexing phase begins.
-    fn on_indexing(&self) {}
     /// Called before embedding starts. `total_batches` is the number of batches to embed.
     fn on_start(&self, _total_batches: usize) {}
     /// Called after each batch completes.
@@ -131,10 +129,6 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         changes.deleted.len(),
         changes.unchanged.len()
     ));
-
-    if let Some(ref progress) = options.progress {
-        progress.on_indexing();
-    }
 
     // Parse all added/modified files in parallel (no DB access).
     // Use cached content from change detection to avoid re-reading modified files.
