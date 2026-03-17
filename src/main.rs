@@ -37,7 +37,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index TypeScript functions in the codebase
+    /// Index functions in the codebase
     Index {
         /// Directory to index
         path: Option<String>,
@@ -50,7 +50,7 @@ enum Commands {
     },
     /// Find existing functions similar to new code
     Query {
-        /// TypeScript file to check
+        /// Source file to check
         file: String,
         /// Read from stdin instead of file
         #[arg(long)]
@@ -131,8 +131,8 @@ fn run_index_cmd(
     if dry_run {
         let start_dir = path.as_deref().map(Path::new).unwrap_or(Path::new("."));
         let project_root = find_project_root(start_dir);
-        let files = vibecheck::util::config::find_typescript_files(&project_root);
-        println!("Would index {} TypeScript files:", files.len());
+        let files = vibecheck::util::config::find_source_files(&project_root);
+        println!("Would index {} source files:", files.len());
         for f in &files {
             println!("  {}", f.display());
         }

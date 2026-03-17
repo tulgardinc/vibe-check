@@ -10,7 +10,7 @@ use crate::store::index_store::{
     delete_functions_for_file, get_functions_without_embeddings, update_embedding,
     upsert_functions, vec_table_exists,
 };
-use crate::util::config::{find_project_root, find_typescript_files, resolve_db_path};
+use crate::util::config::{find_project_root, find_source_files, resolve_db_path};
 use crate::util::hash::sha256;
 use crate::util::logger;
 use rayon::prelude::*;
@@ -59,9 +59,9 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| project_root.clone());
 
-    let files = find_typescript_files(&scan_path);
+    let files = find_source_files(&scan_path);
     if files.is_empty() {
-        logger::info("No TypeScript files found.");
+        logger::info("No source files found.");
         return Ok(IndexResult {
             files_scanned: 0,
             functions_indexed: 0,
@@ -74,7 +74,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         });
     }
 
-    logger::info(&format!("Found {} TypeScript files.", files.len()));
+    logger::info(&format!("Found {} source files.", files.len()));
 
     let (embedder_box, _) = resolve_embedder(
         options.embedder,

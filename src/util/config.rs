@@ -1,6 +1,7 @@
 use crate::error::VibecheckError;
-use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
+
+pub use crate::parser::registry::find_source_files;
 
 pub const DB_FILENAME: &str = ".vibecheck.db";
 
@@ -51,36 +52,7 @@ pub fn resolve_existing_db(
 }
 
 pub fn find_typescript_files(root_dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-
-    let walker = WalkBuilder::new(root_dir)
-        .standard_filters(true)
-        .build();
-
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        if !name.ends_with(".ts") {
-            continue;
-        }
-
-        if name.ends_with(".d.ts") || name.ends_with(".test.ts") || name.ends_with(".spec.ts") {
-            continue;
-        }
-
-        files.push(path.to_path_buf());
-    }
-
-    files.sort();
-    files
+    find_source_files(root_dir)
 }
 
 #[cfg(test)]

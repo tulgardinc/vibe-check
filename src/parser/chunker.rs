@@ -1,3 +1,5 @@
+use crate::parser::language::{LanguageSupport, NodeRole};
+use crate::parser::registry;
 use crate::parser::signature::compute_signature_hash;
 use crate::parser::types::{ChunkType, FunctionChunk, ParamInfo, ParsedFile};
 use crate::util::hash::sha256;
@@ -5,83 +7,13 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
-use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 const MIN_LINES: usize = 3;
 const MIN_BLOCK_LINES: usize = 6;
 
-static FUNCTION_NODE_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "function_declaration",
-        "generator_function_declaration",
-        "method_definition",
-        "arrow_function",
-        "function_expression",
-    ]
-    .into_iter()
-    .collect()
-});
-
-static CONTROL_FLOW_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "try_statement",
-        "switch_statement",
-    ]
-    .into_iter()
-    .collect()
-});
-
-static BLOCK_PARENT_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "try_statement",
-    ]
-    .into_iter()
-    .collect()
-});
-
-static TYPE_NODE_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "type_annotation",
-        "type_arguments",
-        "type_parameters",
-        "as_expression",
-        "satisfies_expression",
-        "return_type",
-    ]
-    .into_iter()
-    .collect()
-});
-
-static STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
-        "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "new",
-        "this", "typeof", "instanceof", "void", "delete", "in", "of", "import", "export",
-        "from", "default", "async", "await", "class", "extends", "implements", "interface",
-        "type", "enum", "true", "false", "null", "undefined",
-    ]
-    .into_iter()
-    .collect()
-});
-
 thread_local! {
-    static PARSER: RefCell<Parser> = RefCell::new({
-        let mut parser = Parser::new();
-        let language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        parser.set_language(&language).expect("failed to set language");
-        parser
-    });
+    static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
 
 pub fn parse_file(path: &Path) -> Result<ParsedFile, std::io::Error> {
@@ -91,7 +23,27 @@ pub fn parse_file(path: &Path) -> Result<ParsedFile, std::io::Error> {
 }
 
 pub fn parse_source(source: &str, file_path: &str) -> ParsedFile {
+    match registry::language_for_file(file_path) {
+        Some(lang) => parse_source_with_lang(source, file_path, lang),
+        None => ParsedFile {
+            file_path: file_path.to_string(),
+            source: source.to_string(),
+            chunks: vec![],
+            parse_errors: vec![format!("No language support for {file_path}")],
+        },
+    }
+}
+
+fn parse_source_with_lang(
+    source: &str,
+    file_path: &str,
+    lang: &dyn LanguageSupport,
+) -> ParsedFile {
     PARSER.with_borrow_mut(|parser| {
+        parser
+            .set_language(&lang.language())
+            .expect("failed to set language");
+
         let tree = match parser.parse(source, None) {
             Some(t) => t,
             None => {
@@ -104,7 +56,6 @@ pub fn parse_source(source: &str, file_path: &str) -> ParsedFile {
             }
         };
 
-        let func_types = &*FUNCTION_NODE_TYPES;
         let mut chunks = Vec::new();
         let mut parse_errors = Vec::new();
 
@@ -115,7 +66,7 @@ pub fn parse_source(source: &str, file_path: &str) -> ParsedFile {
             &mut chunks,
             &mut parse_errors,
             false,
-            func_types,
+            lang,
         );
 
         ParsedFile {
@@ -134,7 +85,7 @@ fn walk_node(
     chunks: &mut Vec<FunctionChunk>,
     errors: &mut Vec<String>,
     parent_exported: bool,
-    func_types: &HashSet<&str>,
+    lang: &dyn LanguageSupport,
 ) {
     if node.kind() == "ERROR" {
         let text = node.utf8_text(source).unwrap_or("");
@@ -146,48 +97,20 @@ fn walk_node(
         ));
     }
 
-    let is_export = node.kind() == "export_statement"
-        || node.kind() == "export_default_declaration";
+    let role = lang.classify_node(node);
+    let is_export = role == NodeRole::Export;
 
-    // Function node
-    if func_types.contains(node.kind()) {
-        if let Some(name) = extract_function_name(node, source) {
+    if role == NodeRole::Function {
+        if let Some(name) = lang.extract_function_name(node, source) {
             if let Some(chunk) =
-                build_chunk(&name, node, node, source, file_path, parent_exported)
+                build_chunk(&name, node, source, file_path, parent_exported, lang)
             {
                 chunks.push(chunk);
             }
-            extract_blocks(node, source, file_path, &name, chunks, func_types);
+            let func_node = lang.inner_function_node(node).unwrap_or(node);
+            extract_blocks(func_node, source, file_path, &name, chunks, lang);
         }
         return; // don't recurse into function bodies
-    }
-
-    // Variable declaration with arrow function or function expression
-    if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "variable_declarator"
-                && let Some(value) = child.child_by_field_name("value")
-                && func_types.contains(value.kind())
-                && let Some(name_node) = child.child_by_field_name("name")
-            {
-                let name = name_node.utf8_text(source).unwrap_or("").to_string();
-                if !name.is_empty() {
-                    if let Some(chunk) = build_chunk(
-                        &name,
-                        value,
-                        node,
-                        source,
-                        file_path,
-                        parent_exported,
-                    ) {
-                        chunks.push(chunk);
-                    }
-                    extract_blocks(value, source, file_path, &name, chunks, func_types);
-                }
-            }
-        }
-        return;
     }
 
     // Recurse into children
@@ -200,7 +123,7 @@ fn walk_node(
             chunks,
             errors,
             is_export || parent_exported,
-            func_types,
+            lang,
         );
     }
 }
@@ -228,11 +151,10 @@ fn format_signature(
 }
 
 /// Collect identifier tokens from the AST, skipping type annotations.
-fn collect_tokens(node: Node, source: &[u8]) -> HashSet<String> {
-    let type_nodes = &*TYPE_NODE_TYPES;
-    let stops = &*STOP_WORDS;
+fn collect_tokens(node: Node, source: &[u8], lang: &dyn LanguageSupport) -> HashSet<String> {
+    let stops = lang.stop_words();
     let mut tokens = HashSet::new();
-    collect_tokens_recursive(node, source, &mut tokens, type_nodes, stops);
+    collect_tokens_recursive(node, source, &mut tokens, lang, stops);
     tokens
 }
 
@@ -240,11 +162,11 @@ fn collect_tokens_recursive(
     node: Node,
     source: &[u8],
     tokens: &mut HashSet<String>,
-    type_nodes: &HashSet<&str>,
+    lang: &dyn LanguageSupport,
     stops: &HashSet<&str>,
 ) {
     // Skip type system nodes entirely
-    if type_nodes.contains(node.kind()) {
+    if lang.classify_node(node) == NodeRole::TypeAnnotation {
         return;
     }
 
@@ -258,7 +180,7 @@ fn collect_tokens_recursive(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_tokens_recursive(child, source, tokens, type_nodes, stops);
+        collect_tokens_recursive(child, source, tokens, lang, stops);
     }
 }
 
@@ -269,11 +191,11 @@ fn make_chunk_id(file_path: &str, name: &str, start_line: usize) -> String {
 
 fn build_chunk(
     name: &str,
-    func_node: Node,
     span_node: Node,
     source: &[u8],
     file_path: &str,
     is_exported: bool,
+    lang: &dyn LanguageSupport,
 ) -> Option<FunctionChunk> {
     let start_row = span_node.start_position().row;
     let end_row = span_node.end_position().row;
@@ -283,14 +205,15 @@ fn build_chunk(
         return None;
     }
 
-    let params = extract_params(func_node, source);
-    let return_type = extract_return_type(func_node, source);
+    let params = lang.extract_params(span_node, source);
+    let return_type = lang.extract_return_type(span_node, source);
     let start_line = start_row + 1;
     let end_line = end_row + 1;
     let source_text = span_node.utf8_text(source).unwrap_or("").to_string();
     let signature_hash = compute_signature_hash(name, &params, return_type.as_deref());
-    let signature = format_signature(&params, return_type.as_deref(), ChunkType::Function, line_count);
-    let tokens = collect_tokens(span_node, source);
+    let signature =
+        format_signature(&params, return_type.as_deref(), ChunkType::Function, line_count);
+    let tokens = collect_tokens(span_node, source, lang);
 
     Some(FunctionChunk {
         id: make_chunk_id(file_path, name, start_line),
@@ -316,10 +239,10 @@ fn extract_blocks(
     file_path: &str,
     context_name: &str,
     chunks: &mut Vec<FunctionChunk>,
-    func_types: &HashSet<&str>,
+    lang: &dyn LanguageSupport,
 ) {
     if let Some(body) = func_node.child_by_field_name("body") {
-        walk_for_blocks(body, source, file_path, context_name, chunks, func_types);
+        walk_for_blocks(body, source, file_path, context_name, chunks, lang);
     }
 }
 
@@ -329,63 +252,58 @@ fn walk_for_blocks(
     file_path: &str,
     context_name: &str,
     chunks: &mut Vec<FunctionChunk>,
-    func_types: &HashSet<&str>,
+    lang: &dyn LanguageSupport,
 ) {
-    let block_parents = &*BLOCK_PARENT_TYPES;
+    let role = lang.classify_node(node);
 
-    if block_parents.contains(node.kind()) {
+    if role.is_block_parent() {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "statement_block"
-                && is_eligible_block(child)
-                && let Some(chunk) = build_block_chunk(child, source, file_path, context_name)
+            if lang.classify_node(child) == NodeRole::Block
+                && is_eligible_block(child, lang)
+                && let Some(chunk) = build_block_chunk(child, source, file_path, context_name, lang)
             {
                 chunks.push(chunk);
             }
         }
     }
 
-    // Arrow function callbacks in variable declarations
-    if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "variable_declarator"
-                && let Some(value) = child.child_by_field_name("value")
-                && value.kind() == "arrow_function"
-                && let Some(arrow_body) = value.child_by_field_name("body")
-                && arrow_body.kind() == "statement_block"
-                && is_eligible_block(arrow_body)
-                && let Some(chunk) =
-                    build_block_chunk(arrow_body, source, file_path, context_name)
-            {
-                chunks.push(chunk);
-            }
-        }
-    }
-
-    // Recurse, but skip nested function boundaries
+    // Recurse, but skip nested function boundaries.
+    // For nested functions (e.g. arrow callbacks in variable declarations),
+    // check if the function body itself is an eligible block.
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if !func_types.contains(child.kind()) {
-            walk_for_blocks(child, source, file_path, context_name, chunks, func_types);
+        let child_role = lang.classify_node(child);
+        if child_role == NodeRole::Function {
+            let func_node = lang.inner_function_node(child).unwrap_or(child);
+            if let Some(body) = func_node.child_by_field_name("body") {
+                if lang.classify_node(body) == NodeRole::Block
+                    && is_eligible_block(body, lang)
+                    && let Some(chunk) =
+                        build_block_chunk(body, source, file_path, context_name, lang)
+                {
+                    chunks.push(chunk);
+                }
+            }
+        } else {
+            walk_for_blocks(child, source, file_path, context_name, chunks, lang);
         }
     }
 }
 
-fn is_eligible_block(block: Node) -> bool {
+fn is_eligible_block(block: Node, lang: &dyn LanguageSupport) -> bool {
     let line_count = block.end_position().row - block.start_position().row + 1;
     if line_count < MIN_BLOCK_LINES {
         return false;
     }
 
-    let cf_types = &*CONTROL_FLOW_TYPES;
     let mut statement_count = 0;
     let mut has_control_flow = false;
 
     let mut cursor = block.walk();
     for child in block.named_children(&mut cursor) {
         statement_count += 1;
-        if cf_types.contains(child.kind()) {
+        if lang.classify_node(child).is_control_flow() {
             has_control_flow = true;
         }
     }
@@ -398,6 +316,7 @@ fn build_block_chunk(
     source: &[u8],
     file_path: &str,
     context_name: &str,
+    lang: &dyn LanguageSupport,
 ) -> Option<FunctionChunk> {
     let start_line = block.start_position().row + 1;
     let end_line = block.end_position().row + 1;
@@ -409,7 +328,7 @@ fn build_block_chunk(
     // when the block's source text changes, even for whitespace-only edits.
     let signature_hash = sha256(&source_text)[..16].to_string();
     let signature = format_signature(&[], None, ChunkType::Block, line_count);
-    let tokens = collect_tokens(block, source);
+    let tokens = collect_tokens(block, source, lang);
 
     Some(FunctionChunk {
         id: make_chunk_id(file_path, &synthetic_name, start_line),
@@ -427,74 +346,6 @@ fn build_block_chunk(
         chunk_type: ChunkType::Block,
         context: Some(context_name.to_string()),
     })
-}
-
-fn extract_function_name(node: Node, source: &[u8]) -> Option<String> {
-    if let Some(name_node) = node.child_by_field_name("name") {
-        let text = name_node.utf8_text(source).unwrap_or("").to_string();
-        if !text.is_empty() {
-            return Some(text);
-        }
-    }
-    None
-}
-
-fn extract_params(node: Node, source: &[u8]) -> Vec<ParamInfo> {
-    let params_node = match node.child_by_field_name("parameters") {
-        Some(n) => n,
-        None => return vec![],
-    };
-
-    let mut params = Vec::new();
-    let mut cursor = params_node.walk();
-
-    for child in params_node.named_children(&mut cursor) {
-        let kind = child.kind();
-        if kind != "required_parameter"
-            && kind != "optional_parameter"
-            && kind != "rest_parameter"
-        {
-            continue;
-        }
-
-        let raw_name = child
-            .child_by_field_name("pattern")
-            .or_else(|| child.child_by_field_name("name"))
-            .map(|n| n.utf8_text(source).unwrap_or("").to_string())
-            .unwrap_or_else(|| child.utf8_text(source).unwrap_or("").to_string());
-
-        let param_name = if kind == "rest_parameter" {
-            format!("...{raw_name}")
-        } else {
-            raw_name
-        };
-
-        let type_annotation = child
-            .child_by_field_name("type")
-            .and_then(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")));
-
-        params.push(ParamInfo {
-            name: param_name,
-            type_: type_annotation,
-        });
-    }
-
-    params
-}
-
-fn extract_return_type(node: Node, source: &[u8]) -> Option<String> {
-    node.child_by_field_name("return_type")
-        .and_then(|n| strip_type_prefix(n.utf8_text(source).unwrap_or("")))
-}
-
-fn strip_type_prefix(text: &str) -> Option<String> {
-    let trimmed = text.strip_prefix(':').unwrap_or(text).trim();
-
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 #[cfg(test)]
