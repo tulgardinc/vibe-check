@@ -2,7 +2,7 @@
   "mcpServers": {
     "vibecheck": {
       "type": "stdio",
-      "command": "/Users/ts/projects/vibe-check/target/release/vibecheck-mcp"
+      "command": "vibecheck-mcp"
     }
   }
 }

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="VibeCheckIcon.svg" alt="vibecheck" width="128" />
+</p>
+
 # vibecheck
 
 Semantic code deduplication. Catches when new code reimplements something that already exists in the codebase — including logic buried inline inside other functions.
@@ -20,7 +24,7 @@ Query:  parse → embed → KNN overfetch → Jaccard re-rank → exclusions →
 ```
 
 1. **Parse** — tree-sitter extracts functions and eligible logic blocks (6+ lines with control flow)
-2. **Embed** — local Ollama generates vector embeddings for each chunk
+2. **Embed** — Ollama generates vector embeddings for each chunk (any embedding model)
 3. **Store** — SQLite + sqlite-vec for fast KNN cosine search
 4. **Rank** — combines embedding distance with Jaccard token overlap for accurate re-ranking
 
@@ -29,7 +33,7 @@ Everything runs locally. No cloud dependencies. Single binary, no runtime needed
 ## Prerequisites
 
 - [Ollama](https://ollama.com) running locally
-- An embedding model (auto-detected; prefers `nomic-embed-code`)
+- Any embedding model — auto-detected; prefers `nomic-embed-code`
 
 ```bash
 ollama pull nomic-embed-code
@@ -100,17 +104,72 @@ vibec status
 ### Options
 
 ```bash
-vibec index [path]       --force        # Full re-index
-vibec query <file>       --top-k 10     # More candidates
-                         --threshold 0.2 # Stricter matching
-                         --json          # JSON output
-vibec scan               --top-n 100    # More pairs
-                         --threshold 0.2 # Stricter
+vibec index [path]       --force           # Full re-index
+                         --dry-run         # Show what would be indexed
+vibec query <file>       --top-k 10        # More candidates
+                         --threshold 0.2   # Stricter matching
+                         --json            # JSON output
+                         --stdin           # Read from stdin
+vibec scan               --top-n 100       # More pairs
+                         --threshold 0.2   # Stricter
+                         --json            # JSON output
 ```
+
+### Global flags
+
+These apply to all commands:
+
+```bash
+--model <name>           # Embedding model (overrides VIBECHECK_MODEL)
+--ollama-host <url>      # Ollama server URL (overrides OLLAMA_HOST)
+--dimensions <n>         # Override embedding dimensions
+--context-length <n>     # Override model context length in tokens
+--max-input-bytes <n>    # Override max input bytes for truncation
+--query-prefix <str>     # Query prefix for search inputs (auto-detected for Nomic models)
+--db <path>              # Database file path
+--verbose                # Verbose output
+```
+
+## Configuration
+
+### Environment variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `VIBECHECK_MODEL` | Embedding model name | Auto-detected (`nomic-embed-code` preferred) |
+| `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
+| `VIBECHECK_DIMENSIONS` | Embedding dimensions | Model default |
+| `VIBECHECK_QUERY_PREFIX` | Query prefix for search | Auto-detected for Nomic models |
+| `VIBECHECK_CONTEXT_LENGTH` | Context length in tokens | Model default |
+| `VIBECHECK_MAX_INPUT_BYTES` | Max input bytes for truncation | 16,000 |
+
+Any embedding model supported by Ollama can be used. The model is auto-detected from your local Ollama instance, preferring `nomic-embed-code` if available. Override with `--model` or `VIBECHECK_MODEL`.
 
 ## MCP server
 
-Add to your MCP client config (e.g. Claude Desktop, Claude Code):
+The MCP server lets AI assistants (Claude Code, Claude Desktop, etc.) use vibecheck directly.
+
+### Setup with `.mcp.json`
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "vibecheck": {
+      "type": "stdio",
+      "command": "vibecheck-mcp",
+      "env": {
+        "VIBECHECK_MODEL": "nomic-ai/nomic-embed-code"
+      }
+    }
+  }
+}
+```
+
+### Setup with Claude Desktop
+
+Add to your Claude Desktop config:
 
 ```json
 {
@@ -122,19 +181,27 @@ Add to your MCP client config (e.g. Claude Desktop, Claude Code):
 }
 ```
 
-Exposes five tools:
+### Exposed tools
 
 | Tool | Purpose |
 |------|---------|
 | `vibecheck_query` | Find similar functions/blocks for given code |
 | `vibecheck_index` | Build or update the semantic index |
+| `vibecheck_index_stop` | Stop a running index operation (progress is saved) |
 | `vibecheck_scan` | Find all similar pairs across the codebase |
 | `vibecheck_status` | Check index health |
 | `vibecheck_add_exclusion` | Suppress a false positive match |
 
+All tools that call Ollama accept optional `model`, `ollamaHost`, `dimensions`, `contextLength`, `maxInputBytes`, `queryPrefix`, and `db` overrides.
+
 ## Supported languages
 
-- TypeScript
+- TypeScript (`.ts`)
+- TSX (`.tsx`)
+- JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`)
+- Rust (`.rs`)
+
+Test files (`.test.*`, `.spec.*`) and declaration files (`.d.ts`, `.d.tsx`) are automatically excluded.
 
 ## Limitations
 

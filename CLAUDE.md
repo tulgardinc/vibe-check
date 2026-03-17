@@ -45,4 +45,4 @@ Three-stage pipeline in `src/`:
 - Function IDs are `filePath:functionName:startLine` — deterministic and greppable
 - Foreign keys enforce `functions.file_path` references `tracked_files.file_path` — delete tracked files cascades to functions
 - Embedding model name is stored in `index_meta`; mismatch at query time triggers warning
-- The `.vibecheck.db` / `.codeuse.db` files are gitignored and regeneratable
+- The `.vibecheck.db` file is gitignored and regeneratable
