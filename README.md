@@ -91,6 +91,8 @@ Binaries are in `target/release/`:
 
 ## CLI usage
 
+Most commands also accept a `--json` parameter for structured output.
+
 ```bash
 # Build the index
 vibec index
