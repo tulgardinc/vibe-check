@@ -10,6 +10,7 @@ use crate::store::index_store::{
     delete_functions_for_file, get_functions_without_embeddings, update_embedding,
     upsert_functions, vec_table_exists,
 };
+use crate::ignore::ignore_file::{load_ignore_file, FileExclusionMatcher};
 use crate::util::config::{find_project_root, find_source_files, resolve_db_path};
 use crate::util::hash::sha256;
 use crate::util::logger;
@@ -59,7 +60,18 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| project_root.clone());
 
-    let files = find_source_files(&scan_path);
+    let ignore_file = load_ignore_file(&project_root);
+    let file_matcher = FileExclusionMatcher::new(&ignore_file.file_exclusions, &project_root);
+
+    let mut files = find_source_files(&scan_path);
+    if !file_matcher.is_empty() {
+        let before = files.len();
+        files.retain(|p| !file_matcher.is_excluded(p));
+        let excluded = before - files.len();
+        if excluded > 0 {
+            logger::info(&format!("Excluded {excluded} files via file exclusions."));
+        }
+    }
     if files.is_empty() {
         logger::info("No source files found.");
         return Ok(IndexResult {

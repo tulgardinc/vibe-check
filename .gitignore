@@ -1,2 +1,3 @@
 .vibecheck.db
 target/
+generate-parsers.sh

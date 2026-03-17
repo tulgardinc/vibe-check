@@ -1,5 +1,7 @@
 use crate::error::VibecheckError;
-use crate::ignore::ignore_file::{load_ignore_file, ExclusionIndex};
+use crate::ignore::ignore_file::{
+    load_ignore_file, ExclusionIndex, FileExclusionMatcher, FilePairExclusionIndex,
+};
 use crate::output::types::{ScanMatch, ScanMatchEntry, ScanMeta, ScanResult, similarity_tier};
 use crate::ranking::jaccard::{combined_score, jaccard_similarity, DEFAULT_RERANK_ALPHA};
 use crate::store::db::{get_meta_value, open_database};
@@ -30,9 +32,17 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
 
     let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
     let conn = open_database(&db_path)?;
-    let embedded = get_embedded_functions_slim(&conn)?;
+    let mut embedded = get_embedded_functions_slim(&conn)?;
     let ignore_file = load_ignore_file(&project_root);
     let exclusion_index = ExclusionIndex::new(&ignore_file);
+    let file_matcher = FileExclusionMatcher::new(&ignore_file.file_exclusions, &project_root);
+    let file_pair_index =
+        FilePairExclusionIndex::new(&ignore_file.file_pair_exclusions, &project_root);
+
+    // Pre-filter: remove functions from file-excluded paths
+    if !file_matcher.is_empty() {
+        embedded.retain(|f| !file_matcher.is_excluded(std::path::Path::new(&f.file_path)));
+    }
 
     if let Some(model) = get_meta_value(&conn, "model_name")? {
         logger::verbose(&format!("Using index built with model: {model}"));
@@ -97,6 +107,10 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
             }
 
             if exclusion_index.is_excluded(&func.signature_hash, &neighbor.signature_hash) {
+                continue;
+            }
+
+            if file_pair_index.is_excluded(&func.file_path, &neighbor.file_path) {
                 continue;
             }
 

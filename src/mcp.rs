@@ -136,6 +136,9 @@ fn handle_tool_call(
         "vibecheck_scan" => handlers::handle_scan(&args),
         "vibecheck_status" => handlers::handle_status(&args),
         "vibecheck_add_exclusion" => handlers::handle_add_exclusion(&args),
+        "vibecheck_add_file_exclusion" => handlers::handle_add_file_exclusion(&args),
+        "vibecheck_add_file_pair_exclusion" => handlers::handle_add_file_pair_exclusion(&args),
+        "vibecheck_add_file_group_exclusion" => handlers::handle_add_file_group_exclusion(&args),
         _ => Err(format!("Unknown tool: {tool_name}")),
     };
 

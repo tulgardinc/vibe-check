@@ -191,6 +191,8 @@ pub struct StatusResult {
     pub last_indexed: String,
     pub exclusions: usize,
     pub stale_exclusions: usize,
+    pub file_exclusions: usize,
+    pub file_pair_exclusions: usize,
 }
 
 #[derive(Debug)]

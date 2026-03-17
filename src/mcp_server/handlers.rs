@@ -3,8 +3,10 @@ use crate::core::query_pipeline::{run_query, QueryOptions};
 use crate::core::scan_pipeline::{run_scan, ScanOptions};
 use crate::core::status_pipeline::{run_status, StatusOptions};
 use crate::embedder::types::OllamaConfig;
-use crate::ignore::ignore_file::{add_exclusion, load_ignore_file, save_ignore_file};
-use crate::ignore::types::{Exclusion, ExclusionPair, ExclusionSide};
+use crate::ignore::ignore_file::{
+    add_exclusion, add_file_exclusion, add_file_pair_exclusion, load_ignore_file, save_ignore_file,
+};
+use crate::ignore::types::{Exclusion, ExclusionPair, ExclusionSide, FileExclusion, FilePairExclusion};
 use crate::mcp_server::types::{IndexingState, IndexingStatus};
 use crate::util::config::find_project_root;
 use serde_json::Value;
@@ -270,5 +272,115 @@ pub fn handle_add_exclusion(args: &Value) -> Result<String, String> {
         candidate_function,
         reason,
         updated.exclusions.len()
+    ))
+}
+
+pub fn handle_add_file_exclusion(args: &Value) -> Result<String, String> {
+    let pattern = get_str(args, "pattern")?;
+    let reason = get_str(args, "reason")?;
+
+    let project_root = find_project_root(Path::new("."));
+    let ignore_file = load_ignore_file(&project_root);
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let updated = add_file_exclusion(
+        &ignore_file,
+        FileExclusion {
+            pattern: pattern.clone(),
+            reason: reason.clone(),
+            added: today,
+        },
+    );
+
+    save_ignore_file(&project_root, &updated);
+
+    Ok(format!(
+        "File exclusion added: \"{}\" (\"{}\"). Total file exclusions: {}.",
+        pattern,
+        reason,
+        updated.file_exclusions.len()
+    ))
+}
+
+pub fn handle_add_file_pair_exclusion(args: &Value) -> Result<String, String> {
+    let file_a = get_str(args, "fileA")?;
+    let file_b = get_str(args, "fileB")?;
+    let reason = get_str(args, "reason")?;
+
+    let project_root = find_project_root(Path::new("."));
+    let ignore_file = load_ignore_file(&project_root);
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let updated = add_file_pair_exclusion(
+        &ignore_file,
+        FilePairExclusion {
+            a: file_a.clone(),
+            b: file_b.clone(),
+            reason: reason.clone(),
+            added: today,
+        },
+    );
+
+    save_ignore_file(&project_root, &updated);
+
+    Ok(format!(
+        "File pair exclusion added: {} \u{2194} {} (\"{}\"). Total file pair exclusions: {}.",
+        file_a,
+        file_b,
+        reason,
+        updated.file_pair_exclusions.len()
+    ))
+}
+
+pub fn handle_add_file_group_exclusion(args: &Value) -> Result<String, String> {
+    let files: Vec<String> = args
+        .get("files")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing required parameter: files (array of strings)")?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+
+    if files.len() < 2 {
+        return Err("Need at least 2 files to create group exclusions".into());
+    }
+
+    let reason = get_str(args, "reason")?;
+
+    let project_root = find_project_root(Path::new("."));
+    let mut ignore_file = load_ignore_file(&project_root);
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let mut added = 0;
+
+    for i in 0..files.len() {
+        for j in (i + 1)..files.len() {
+            let before = ignore_file.file_pair_exclusions.len();
+            ignore_file = add_file_pair_exclusion(
+                &ignore_file,
+                FilePairExclusion {
+                    a: files[i].clone(),
+                    b: files[j].clone(),
+                    reason: reason.clone(),
+                    added: today.clone(),
+                },
+            );
+            if ignore_file.file_pair_exclusions.len() > before {
+                added += 1;
+            }
+        }
+    }
+
+    save_ignore_file(&project_root, &ignore_file);
+
+    let total_pairs = files.len() * (files.len() - 1) / 2;
+    Ok(format!(
+        "Group exclusion: {} files, {} pairs added ({} already existed). Total file pair exclusions: {}.",
+        files.len(),
+        added,
+        total_pairs - added,
+        ignore_file.file_pair_exclusions.len()
     ))
 }

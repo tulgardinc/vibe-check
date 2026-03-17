@@ -69,10 +69,22 @@ pub fn format_status_human(result: &StatusResult) -> String {
         String::new()
     };
 
+    let file_excl = if result.file_exclusions > 0 {
+        format!("\nFile exclusions: {}", result.file_exclusions)
+    } else {
+        String::new()
+    };
+
+    let file_pair_excl = if result.file_pair_exclusions > 0 {
+        format!("\nFile pair exclusions: {}", result.file_pair_exclusions)
+    } else {
+        String::new()
+    };
+
     format!(
-        "Database: {} ({:.1} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}",
+        "Database: {} ({:.1} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}{}{}",
         result.db_path, size_mb, result.model, result.dimensions,
         result.indexed_functions, unembedded, result.tracked_files,
-        result.last_indexed, result.exclusions, stale
+        result.last_indexed, result.exclusions, stale, file_excl, file_pair_excl
     )
 }

@@ -33,6 +33,8 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
             last_indexed: String::new(),
             exclusions: 0,
             stale_exclusions: 0,
+            file_exclusions: 0,
+            file_pair_exclusions: 0,
         });
     }
 
@@ -54,6 +56,8 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
 
     let ignore_file = load_ignore_file(&project_root);
     let exclusion_count = ignore_file.exclusions.len();
+    let file_exclusion_count = ignore_file.file_exclusions.len();
+    let file_pair_exclusion_count = ignore_file.file_pair_exclusions.len();
     let stale = detect_stale_exclusions(&conn, &ignore_file)?;
 
     Ok(StatusResult {
@@ -68,5 +72,7 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
         last_indexed,
         exclusions: exclusion_count,
         stale_exclusions: stale.len(),
+        file_exclusions: file_exclusion_count,
+        file_pair_exclusions: file_pair_exclusion_count,
     })
 }

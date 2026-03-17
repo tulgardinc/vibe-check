@@ -22,9 +22,28 @@ pub struct Exclusion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileExclusion {
+    pub pattern: String,
+    pub reason: String,
+    pub added: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilePairExclusion {
+    pub a: String,
+    pub b: String,
+    pub reason: String,
+    pub added: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IgnoreFile {
     pub version: u32,
     pub exclusions: Vec<Exclusion>,
+    #[serde(default, rename = "fileExclusions")]
+    pub file_exclusions: Vec<FileExclusion>,
+    #[serde(default, rename = "filePairExclusions")]
+    pub file_pair_exclusions: Vec<FilePairExclusion>,
 }
 
 impl Default for IgnoreFile {
@@ -32,6 +51,8 @@ impl Default for IgnoreFile {
         Self {
             version: 1,
             exclusions: Vec::new(),
+            file_exclusions: Vec::new(),
+            file_pair_exclusions: Vec::new(),
         }
     }
 }

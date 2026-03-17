@@ -72,7 +72,7 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "vibecheck_add_exclusion".into(),
-            description: "Exclude a pair from future results".into(),
+            description: "Exclude a function pair from future results".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "required": ["queryFunction", "queryPath", "querySignatureHash",
@@ -84,6 +84,43 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
                     "candidateFunction": { "type": "string" },
                     "candidatePath": { "type": "string" },
                     "candidateSignatureHash": { "type": "string" },
+                    "reason": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "vibecheck_add_file_exclusion".into(),
+            description: "Exclude a file or glob pattern from indexing and results".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["pattern", "reason"],
+                "properties": {
+                    "pattern": { "type": "string", "description": "File path or glob pattern relative to project root (e.g. \"src/generated/**\", \"src/old.ts\")" },
+                    "reason": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "vibecheck_add_file_pair_exclusion".into(),
+            description: "Exclude all comparisons between functions in two files".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["fileA", "fileB", "reason"],
+                "properties": {
+                    "fileA": { "type": "string", "description": "First file path relative to project root" },
+                    "fileB": { "type": "string", "description": "Second file path relative to project root" },
+                    "reason": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "vibecheck_add_file_group_exclusion".into(),
+            description: "Exclude all comparisons between files in a group. Expands to all pairwise file pair exclusions.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["files", "reason"],
+                "properties": {
+                    "files": { "type": "array", "items": { "type": "string" }, "description": "List of file paths relative to project root (at least 2)" },
                     "reason": { "type": "string" }
                 }
             }),

@@ -196,7 +196,10 @@ Add to your Claude Desktop config:
 | `vibecheck_index_stop` | Stop a running index operation (progress is saved) |
 | `vibecheck_scan` | Find all similar pairs across the codebase |
 | `vibecheck_status` | Check index health |
-| `vibecheck_add_exclusion` | Suppress a false positive match |
+| `vibecheck_add_exclusion` | Suppress a false positive function pair match |
+| `vibecheck_add_file_exclusion` | Exclude a file or glob pattern from indexing and results |
+| `vibecheck_add_file_pair_exclusion` | Exclude all comparisons between functions in two files |
+| `vibecheck_add_file_group_exclusion` | Exclude comparisons within a group of files (expands to all pairs) |
 
 All tools that call Ollama accept optional `model`, `ollamaHost`, `dimensions`, `contextLength`, `maxInputBytes`, `queryPrefix`, and `db` overrides.
 
@@ -206,6 +209,7 @@ All tools that call Ollama accept optional `model`, `ollamaHost`, `dimensions`, 
 - TSX (`.tsx`)
 - JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`)
 - Rust (`.rs`)
+- Python (`.py`)
 
 Test files (`.test.*`, `.spec.*`) and declaration files (`.d.ts`, `.d.tsx`) are automatically excluded.
 
@@ -213,15 +217,46 @@ Test files (`.test.*`, `.spec.*`) and declaration files (`.d.ts`, `.d.tsx`) are 
 
 - **Functions only** — top-level code outside of functions (module-level logic, script-style files) is not indexed. Only named functions, methods, and eligible inline blocks within them are captured.
 
-## False positive management
+## Exclusions
 
-When a match isn't a real duplicate, exclude it:
+Exclusions are stored in `.vibecheck-ignore.json` at the project root. There are three levels:
 
+**Function pair** — suppress a specific false positive match between two functions:
 ```bash
 # Via MCP: use vibecheck_add_exclusion with the signatureHash values from results
-
-# Exclusions are stored in .vibecheck-ignore.json at the project root
 ```
+
+**File** — exclude a file or glob pattern from indexing entirely:
+```bash
+# Via MCP: use vibecheck_add_file_exclusion with a pattern like "src/generated/**"
+```
+
+**File pair** — prevent any functions in two files from being compared:
+```bash
+# Via MCP: use vibecheck_add_file_pair_exclusion with fileA and fileB paths
+```
+
+**File group** — same as file pair, but for multiple files at once (expands to all pairwise combinations):
+```bash
+# Via MCP: use vibecheck_add_file_group_exclusion with a list of file paths
+```
+
+You can also edit `.vibecheck-ignore.json` directly:
+
+```json
+{
+  "version": 1,
+  "exclusions": [],
+  "fileExclusions": [
+    { "pattern": "src/generated/**", "reason": "auto-generated", "added": "2025-01-01" }
+  ],
+  "filePairExclusions": [
+    { "a": "src/utils/math.ts", "b": "src/legacy/math.ts", "reason": "intentional fork", "added": "2025-01-01" }
+  ]
+}
+```
+
+File exclusion patterns use gitignore syntax (relative to project root). For pair exclusions (both function and file), `a` and `b` are interchangeable — order doesn't matter.
 
 ## License
 

@@ -1,6 +1,9 @@
 use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
 use crate::error::VibecheckError;
-use crate::ignore::ignore_file::{apply_exclusions, load_ignore_file, ExclusionIndex};
+use crate::ignore::ignore_file::{
+    apply_exclusions, load_ignore_file, ExclusionIndex, FileExclusionMatcher,
+    FilePairExclusionIndex,
+};
 use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::{Candidate, QueryFunction, QueryMeta, QueryResult};
 use crate::parser::chunker::parse_source;
@@ -9,6 +12,7 @@ use crate::store::db::{get_meta_value, open_database};
 use crate::store::index_store::{count_functions, query_knn, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
+use std::path::Path;
 use std::time::Instant;
 
 /// Over-fetch multiplier for KNN before filtering and re-ranking.
@@ -70,9 +74,12 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
         ));
     }
 
-    // Load exclusions and precompute index for O(1) lookup
+    // Load exclusions and precompute indices for O(1) lookup
     let ignore_file = load_ignore_file(&project_root);
     let exclusion_index = ExclusionIndex::new(&ignore_file);
+    let file_matcher = FileExclusionMatcher::new(&ignore_file.file_exclusions, &project_root);
+    let file_pair_index =
+        FilePairExclusionIndex::new(&ignore_file.file_pair_exclusions, &project_root);
     let stale = detect_stale_exclusions(&conn, &ignore_file)?;
     for w in &stale {
         warnings.push(w.reason.clone());
@@ -128,9 +135,13 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
             })
             .collect();
 
-        // Apply exclusions
+        // Apply exclusions (signature-hash pairs, file exclusions, file-pair exclusions)
         output_candidates =
             apply_exclusions(&exclusion_index, output_candidates, &chunk.signature_hash);
+        output_candidates.retain(|c| {
+            !file_matcher.is_excluded(Path::new(&c.path))
+                && !file_pair_index.is_excluded(&chunk.file_path, &c.path)
+        });
 
         // Slice to top-k
         output_candidates.truncate(options.top_k);
