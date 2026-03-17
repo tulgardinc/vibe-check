@@ -191,7 +191,7 @@ Add to your Claude Desktop config:
 
 | Tool | Purpose |
 |------|---------|
-| `vibecheck_query` | Find similar functions/blocks for given code |
+| `vibecheck_query` | Find similar functions/blocks — accepts a `file` path or raw `source` code |
 | `vibecheck_index` | Build or update the semantic index |
 | `vibecheck_index_stop` | Stop a running index operation (progress is saved) |
 | `vibecheck_scan` | Find all similar pairs across the codebase |

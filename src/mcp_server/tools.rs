@@ -4,7 +4,7 @@ pub fn get_tool_list() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "vibecheck_query".into(),
-            description: "Find existing functions similar to new code".into(),
+            description: "Find existing functions similar to new code. Accepts either a 'file' path or raw 'source' code.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
