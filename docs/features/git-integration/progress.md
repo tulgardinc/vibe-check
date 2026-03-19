@@ -8,3 +8,4 @@
 - Phase 3: Review (1 iteration, outcome: ready to ship — 4 important issues fixed)
 - Phase 4: Documentation
 - Phase 5: Index
+- Phase 6: Commit
