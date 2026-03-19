@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use vibecheck::core::git_pipeline::{run_commit_query, run_git_query, CommitQueryOptions, GitQueryOptions};
 use vibecheck::core::index_pipeline::{run_index, IndexOptions, IndexProgress};
 use vibecheck::core::query_pipeline::{run_query, QueryOptions};
 use vibecheck::core::scan_pipeline::{run_scan, ScanOptions};
@@ -10,7 +11,9 @@ use vibecheck::ignore::types::{Exclusion, ExclusionPair, ExclusionSide, FileExcl
 use vibecheck::output::formatter::{format_human, format_index_json, format_json, format_status_json};
 use vibecheck::output::scan_formatter::{format_scan_human, format_scan_json};
 use vibecheck::output::types::{DryRunResult, ExcludeResult};
-use vibecheck::util::config::find_project_root;
+use vibecheck::store::cache::prune_cache;
+use vibecheck::util::config::{find_project_root, resolve_cache_path};
+use vibecheck::util::git::is_git_repo;
 use vibecheck::util::logger::{self, LogLevel};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{self, IsTerminal, Read};
@@ -112,6 +115,37 @@ enum Commands {
         #[command(subcommand)]
         action: ExcludeAction,
     },
+    /// Check uncommitted changes for similar functions
+    Git {
+        /// Number of candidates per function
+        #[arg(long, default_value = "5")]
+        top_k: usize,
+        /// Cosine distance threshold
+        #[arg(long, default_value = "0.3")]
+        threshold: f64,
+        /// Force JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a specific commit for similar functions
+    Commit {
+        /// Commit hash to check
+        hash: String,
+        /// Number of candidates per function
+        #[arg(long, default_value = "5")]
+        top_k: usize,
+        /// Cosine distance threshold
+        #[arg(long, default_value = "0.3")]
+        threshold: f64,
+        /// Force JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage the shared embedding cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -184,6 +218,16 @@ enum ExcludeAction {
     },
 }
 
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Remove unreferenced entries from the embedding cache
+    Prune {
+        /// Force JSON output
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -222,6 +266,20 @@ fn main() {
         } => run_scan_cmd(top_n, threshold, db, json),
         Commands::Status { json } => run_status_cmd(db, json),
         Commands::Exclude { action } => run_exclude_cmd(action),
+        Commands::Git {
+            top_k,
+            threshold,
+            json,
+        } => run_git_cmd(top_k, threshold, db, json, ollama),
+        Commands::Commit {
+            hash,
+            top_k,
+            threshold,
+            json,
+        } => run_commit_cmd(hash, top_k, threshold, db, json, ollama),
+        Commands::Cache { action } => match action {
+            CacheAction::Prune { json } => run_cache_prune_cmd(json),
+        },
     };
 
     if let Err(e) = result {
@@ -550,6 +608,82 @@ fn run_exclude_cmd(action: ExcludeAction) -> Result<(), Box<dyn std::error::Erro
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
     } else {
         println!("{}", result.message);
+    }
+
+    Ok(())
+}
+
+fn run_git_cmd(
+    top_k: usize,
+    threshold: f64,
+    db: Option<String>,
+    json: bool,
+    ollama: vibecheck::embedder::types::OllamaConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = run_git_query(GitQueryOptions {
+        top_k,
+        threshold,
+        db_path: db,
+        project_root: None,
+        ollama,
+        embedder: None,
+    })?;
+
+    if should_use_json(json) {
+        println!("{}", format_json(&result));
+    } else {
+        print!("{}", format_human(&result));
+    }
+
+    Ok(())
+}
+
+fn run_commit_cmd(
+    hash: String,
+    top_k: usize,
+    threshold: f64,
+    db: Option<String>,
+    json: bool,
+    ollama: vibecheck::embedder::types::OllamaConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = run_commit_query(CommitQueryOptions {
+        hash,
+        top_k,
+        threshold,
+        db_path: db,
+        project_root: None,
+        ollama,
+        embedder: None,
+    })?;
+
+    if should_use_json(json) {
+        println!("{}", format_json(&result));
+    } else {
+        print!("{}", format_human(&result));
+    }
+
+    Ok(())
+}
+
+fn run_cache_prune_cmd(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let project_root = find_project_root(Path::new("."));
+
+    if !is_git_repo(&project_root) {
+        return Err("Not a git repository. Cache prune requires git.".into());
+    }
+
+    let cache_path = resolve_cache_path(&project_root)
+        .ok_or("Could not resolve cache path. Is this a git repository?")?;
+
+    let result = prune_cache(&cache_path, &project_root)?;
+
+    if should_use_json(json) {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    } else {
+        println!(
+            "Pruned {} entries, freed {} bytes.",
+            result.entries_removed, result.bytes_freed
+        );
     }
 
     Ok(())

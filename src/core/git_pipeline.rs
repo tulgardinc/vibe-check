@@ -1,7 +1,20 @@
-use crate::embedder::types::{Embedder, OllamaConfig};
+use crate::core::query_pipeline::{query_chunks, QueryChunkOptions};
+use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
 use crate::error::VibecheckError;
-use crate::output::types::QueryResult;
+use crate::output::types::{QueryMeta, QueryResult};
+use crate::parser::chunker::parse_source;
+use crate::parser::registry;
 use crate::parser::types::FunctionChunk;
+use crate::store::db::{close_database, get_meta_value, open_database};
+use crate::store::index_store::count_functions;
+use crate::util::config::{resolve_existing_db, resolve_project_root};
+use crate::util::git::{
+    check_staleness, diff_commit, diff_working_tree, is_git_repo, read_working_tree_file,
+    show_file, DiffStatus,
+};
+use crate::util::hash::sha256;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 pub struct GitQueryOptions {
     pub top_k: usize,
@@ -25,13 +38,276 @@ pub struct CommitQueryOptions {
 /// Query uncommitted changes for duplicates.
 /// Returns the same QueryResult as vibec query.
 pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckError> {
-    todo!("git-integration: not yet implemented")
+    let start = Instant::now();
+
+    let project_root = resolve_project_root(options.project_root.as_deref());
+
+    // Validate git repo
+    if !is_git_repo(&project_root) {
+        return Err(VibecheckError::Git(
+            "Not a git repository. These commands require git.".into(),
+        ));
+    }
+
+    // Open DB and resolve embedder
+    let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
+    let conn = open_database(&db_path)?;
+    let (embedder_box, _) = resolve_embedder(options.embedder, &options.ollama)?;
+    let embedder: &dyn Embedder = embedder_box.as_ref();
+
+    let mut warnings = Vec::new();
+
+    // Check model mismatch
+    if let Some(stored_model) = get_meta_value(&conn, "model_name")?
+        && stored_model != embedder.model_name()
+    {
+        warnings.push(format!(
+            "Model mismatch: index was built with '{}' but current model is '{}'. \
+             Results may be inaccurate.",
+            stored_model,
+            embedder.model_name()
+        ));
+    }
+
+    // Check index staleness
+    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
+        warnings.push(staleness_warning);
+    }
+
+    // Get diff entries from working tree
+    let diff_entries = diff_working_tree(&project_root)?;
+
+    // Filter to supported file extensions
+    let diff_entries: Vec<_> = diff_entries
+        .into_iter()
+        .filter(|e| registry::language_for_file(&e.path).is_some())
+        .collect();
+
+    let mut all_query_chunks = Vec::new();
+    let mut all_removed: HashSet<(String, String)> = HashSet::new();
+
+    for entry in &diff_entries {
+        match entry.status {
+            DiffStatus::Added | DiffStatus::Modified => {
+                // Read NEW version from filesystem
+                let new_source = read_working_tree_file(&project_root, &entry.path)?;
+                let new_parsed = parse_source(&new_source, &entry.path);
+
+                // Read OLD version from HEAD (None for new files -> empty old chunks)
+                let old_chunks = if entry.status == DiffStatus::Added {
+                    vec![]
+                } else {
+                    match show_file(&project_root, "HEAD", &entry.path)? {
+                        Some(old_source) => parse_source(&old_source, &entry.path).chunks,
+                        None => vec![],
+                    }
+                };
+
+                let file_diff = compare_chunks(&old_chunks, &new_parsed.chunks);
+                all_query_chunks.extend(file_diff.query_chunks);
+                all_removed.extend(file_diff.removed);
+            }
+            DiffStatus::Deleted => {
+                // Parse OLD version, all functions go into removed set
+                if let Some(old_source) = show_file(&project_root, "HEAD", &entry.path)? {
+                    let old_parsed = parse_source(&old_source, &entry.path);
+                    for chunk in &old_parsed.chunks {
+                        all_removed.insert((
+                            chunk.file_path.clone(),
+                            chunk.function_name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let indexed_count = count_functions(&conn)?;
+    let query_count = all_query_chunks.len();
+
+    // If no query chunks, return empty result
+    if all_query_chunks.is_empty() {
+        close_database(conn)?;
+        return Ok(QueryResult {
+            query_functions: vec![],
+            warnings,
+            meta: QueryMeta {
+                model: embedder.model_name().to_string(),
+                indexed_functions: indexed_count,
+                query_functions: 0,
+                elapsed_ms: start.elapsed().as_millis(),
+            },
+        });
+    }
+
+    // Call query_chunks with the collected chunks
+    let chunk_options = QueryChunkOptions {
+        top_k: options.top_k,
+        threshold: options.threshold,
+        project_root: &project_root,
+    };
+    let (mut query_functions, chunk_warnings) =
+        query_chunks(&all_query_chunks, &conn, embedder, &chunk_options)?;
+    warnings.extend(chunk_warnings);
+
+    // Post-filter: remove candidates where (candidate.path, candidate.name) is in the removed set
+    for qf in &mut query_functions {
+        qf.candidates
+            .retain(|c| !all_removed.contains(&(c.path.clone(), c.name.clone())));
+    }
+
+    close_database(conn)?;
+
+    Ok(QueryResult {
+        query_functions,
+        warnings,
+        meta: QueryMeta {
+            model: embedder.model_name().to_string(),
+            indexed_functions: indexed_count,
+            query_functions: query_count,
+            elapsed_ms: start.elapsed().as_millis(),
+        },
+    })
 }
 
 /// Query a specific commit's changes for duplicates against the current index.
 /// Returns the same QueryResult as vibec query.
 pub fn run_commit_query(options: CommitQueryOptions) -> Result<QueryResult, VibecheckError> {
-    todo!("git-integration: not yet implemented")
+    let start = Instant::now();
+
+    let project_root = resolve_project_root(options.project_root.as_deref());
+
+    // Validate git repo
+    if !is_git_repo(&project_root) {
+        return Err(VibecheckError::Git(
+            "Not a git repository. These commands require git.".into(),
+        ));
+    }
+
+    // Open DB and resolve embedder
+    let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
+    let conn = open_database(&db_path)?;
+    let (embedder_box, _) = resolve_embedder(options.embedder, &options.ollama)?;
+    let embedder: &dyn Embedder = embedder_box.as_ref();
+
+    let mut warnings = Vec::new();
+
+    // Check model mismatch
+    if let Some(stored_model) = get_meta_value(&conn, "model_name")?
+        && stored_model != embedder.model_name()
+    {
+        warnings.push(format!(
+            "Model mismatch: index was built with '{}' but current model is '{}'. \
+             Results may be inaccurate.",
+            stored_model,
+            embedder.model_name()
+        ));
+    }
+
+    // Check index staleness
+    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
+        warnings.push(staleness_warning);
+    }
+
+    // Get diff entries for the commit
+    let diff_entries = diff_commit(&project_root, &options.hash)?;
+
+    // Filter to supported file extensions
+    let diff_entries: Vec<_> = diff_entries
+        .into_iter()
+        .filter(|e| registry::language_for_file(&e.path).is_some())
+        .collect();
+
+    let mut all_query_chunks = Vec::new();
+    let mut all_removed: HashSet<(String, String)> = HashSet::new();
+
+    let parent_rev = format!("{}^1", options.hash);
+
+    for entry in &diff_entries {
+        match entry.status {
+            DiffStatus::Added | DiffStatus::Modified => {
+                // Read NEW version from the commit
+                let new_source = match show_file(&project_root, &options.hash, &entry.path)? {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let new_parsed = parse_source(&new_source, &entry.path);
+
+                // Read OLD version from the parent commit (None for new files -> empty old chunks)
+                let old_chunks = if entry.status == DiffStatus::Added {
+                    vec![]
+                } else {
+                    match show_file(&project_root, &parent_rev, &entry.path)? {
+                        Some(old_source) => parse_source(&old_source, &entry.path).chunks,
+                        None => vec![],
+                    }
+                };
+
+                let file_diff = compare_chunks(&old_chunks, &new_parsed.chunks);
+                all_query_chunks.extend(file_diff.query_chunks);
+                all_removed.extend(file_diff.removed);
+            }
+            DiffStatus::Deleted => {
+                // Parse OLD version from the parent, all functions go into removed set
+                if let Some(old_source) = show_file(&project_root, &parent_rev, &entry.path)? {
+                    let old_parsed = parse_source(&old_source, &entry.path);
+                    for chunk in &old_parsed.chunks {
+                        all_removed.insert((
+                            chunk.file_path.clone(),
+                            chunk.function_name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let indexed_count = count_functions(&conn)?;
+    let query_count = all_query_chunks.len();
+
+    // If no query chunks, return empty result
+    if all_query_chunks.is_empty() {
+        close_database(conn)?;
+        return Ok(QueryResult {
+            query_functions: vec![],
+            warnings,
+            meta: QueryMeta {
+                model: embedder.model_name().to_string(),
+                indexed_functions: indexed_count,
+                query_functions: 0,
+                elapsed_ms: start.elapsed().as_millis(),
+            },
+        });
+    }
+
+    // Call query_chunks with the collected chunks
+    let chunk_options = QueryChunkOptions {
+        top_k: options.top_k,
+        threshold: options.threshold,
+        project_root: &project_root,
+    };
+    let (mut query_functions, chunk_warnings) =
+        query_chunks(&all_query_chunks, &conn, embedder, &chunk_options)?;
+    warnings.extend(chunk_warnings);
+
+    // Post-filter: remove candidates where (candidate.path, candidate.name) is in the removed set
+    for qf in &mut query_functions {
+        qf.candidates
+            .retain(|c| !all_removed.contains(&(c.path.clone(), c.name.clone())));
+    }
+
+    close_database(conn)?;
+
+    Ok(QueryResult {
+        query_functions,
+        warnings,
+        meta: QueryMeta {
+            model: embedder.model_name().to_string(),
+            indexed_functions: indexed_count,
+            query_functions: query_count,
+            elapsed_ms: start.elapsed().as_millis(),
+        },
+    })
 }
 
 /// Represents the diff analysis for a single file.
@@ -46,7 +322,45 @@ pub struct FileDiff {
 /// Compare old and new parsed chunks to determine added/modified/removed.
 /// Comparison key: function_name. Modification detected by content hash (sha256 of source_text).
 pub fn compare_chunks(old: &[FunctionChunk], new: &[FunctionChunk]) -> FileDiff {
-    todo!("git-integration: not yet implemented")
+    // Build a map of old chunks: function_name -> sha256(source_text)
+    let old_map: HashMap<&str, String> = old
+        .iter()
+        .map(|chunk| (chunk.function_name.as_str(), sha256(&chunk.source_text)))
+        .collect();
+
+    // Build a set of new function names for checking removed
+    let new_names: HashSet<&str> = new.iter().map(|c| c.function_name.as_str()).collect();
+
+    let mut query_chunks = Vec::new();
+
+    for chunk in new {
+        match old_map.get(chunk.function_name.as_str()) {
+            None => {
+                // Added: function_name not in old
+                query_chunks.push(chunk.clone());
+            }
+            Some(old_hash) => {
+                let new_hash = sha256(&chunk.source_text);
+                if *old_hash != new_hash {
+                    // Modified: same name, different content hash
+                    query_chunks.push(chunk.clone());
+                }
+                // else: unchanged, skip
+            }
+        }
+    }
+
+    // Removed: functions in old but not in new
+    let removed: Vec<(String, String)> = old
+        .iter()
+        .filter(|chunk| !new_names.contains(chunk.function_name.as_str()))
+        .map(|chunk| (chunk.file_path.clone(), chunk.function_name.clone()))
+        .collect();
+
+    FileDiff {
+        query_chunks,
+        removed,
+    }
 }
 
 #[cfg(test)]

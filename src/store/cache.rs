@@ -1,5 +1,6 @@
 use crate::error::VibecheckError;
 use rusqlite::Connection;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -14,7 +15,8 @@ pub struct CacheStats {
 }
 
 /// Result of a cache prune operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PruneResult {
     pub entries_removed: usize,
     pub bytes_freed: u64,
