@@ -52,6 +52,20 @@ pub fn open_database_no_vec(db_path: &str) -> Result<Connection, VibecheckError>
     Ok(conn)
 }
 
+/// Checkpoint the WAL and close the connection cleanly.
+///
+/// In WAL mode, `-wal` and `-shm` files persist on disk until a checkpoint
+/// merges the WAL back into the main database file.  `sqlite3_close()` (called
+/// by rusqlite's `Drop`) does **not** force a checkpoint, so these files linger
+/// after every run.  Calling `PRAGMA wal_checkpoint(TRUNCATE)` before drop
+/// merges all WAL pages and truncates both files to zero length, leaving only
+/// the single `.db` file on disk.
+pub fn close_database(conn: Connection) -> Result<(), VibecheckError> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    // `conn` is dropped here, calling sqlite3_close()
+    Ok(())
+}
+
 fn get_schema_version(conn: &Connection) -> i32 {
     conn.pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap_or_else(|e| {

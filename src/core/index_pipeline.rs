@@ -2,7 +2,7 @@ use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
 use crate::error::VibecheckError;
 use crate::output::types::IndexResult;
 use crate::parser::chunker::{parse_file, parse_source};
-use crate::store::db::{get_meta_value, open_database, set_meta_value};
+use crate::store::db::{close_database, get_meta_value, open_database, set_meta_value};
 use crate::store::file_tracker::{
     compute_changed_files, remove_tracked_file, upsert_tracked_file,
 };
@@ -292,5 +292,6 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         result.functions_indexed, result.files_scanned
     ));
 
+    close_database(conn)?;
     Ok(result)
 }

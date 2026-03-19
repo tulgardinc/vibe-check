@@ -2,7 +2,7 @@ use crate::error::VibecheckError;
 use crate::ignore::ignore_file::load_ignore_file;
 use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::StatusResult;
-use crate::store::db::{get_meta_value, open_database_no_vec};
+use crate::store::db::{close_database, get_meta_value, open_database_no_vec};
 use crate::store::file_tracker::get_tracked_files;
 use crate::store::index_store::{count_functions, count_functions_without_embeddings};
 use crate::util::config::{find_project_root, DB_FILENAME};
@@ -60,6 +60,7 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
     let file_pair_exclusion_count = ignore_file.file_pair_exclusions.len();
     let stale = detect_stale_exclusions(&conn, &ignore_file)?;
 
+    close_database(conn)?;
     Ok(StatusResult {
         exists: true,
         db_path,

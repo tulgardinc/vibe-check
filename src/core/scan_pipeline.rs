@@ -4,7 +4,7 @@ use crate::ignore::ignore_file::{
 };
 use crate::output::types::{ScanMatch, ScanMatchEntry, ScanMeta, ScanResult, similarity_tier};
 use crate::ranking::jaccard::{combined_score, jaccard_similarity, DEFAULT_RERANK_ALPHA};
-use crate::store::db::{get_meta_value, open_database};
+use crate::store::db::{close_database, get_meta_value, open_database};
 use crate::store::index_store::{get_embedded_functions_slim, query_knn_raw, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
@@ -145,11 +145,13 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
     all_matches.truncate(options.top_n);
 
     let pairs_found = all_matches.len();
+    let model = get_meta_value(&conn, "model_name")?.unwrap_or_default();
 
+    close_database(conn)?;
     Ok(ScanResult {
         matches: all_matches,
         meta: ScanMeta {
-            model: get_meta_value(&conn, "model_name")?.unwrap_or_default(),
+            model,
             chunks_scanned: embedded.len(),
             pairs_found,
             elapsed_ms: start.elapsed().as_millis(),

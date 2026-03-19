@@ -8,7 +8,7 @@ use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::{Candidate, QueryFunction, QueryMeta, QueryResult};
 use crate::parser::chunker::parse_source;
 use crate::ranking::jaccard::{rerank, RerankItem, DEFAULT_RERANK_ALPHA};
-use crate::store::db::{get_meta_value, open_database};
+use crate::store::db::{close_database, get_meta_value, open_database};
 use crate::store::index_store::{count_functions, query_knn, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
@@ -157,6 +157,7 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
         });
     }
 
+    close_database(conn)?;
     Ok(QueryResult {
         query_functions,
         warnings,
