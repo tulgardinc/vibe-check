@@ -23,4 +23,7 @@ pub enum VibecheckError {
 
     #[error("{0}")]
     Index(String),
+
+    #[error("{0}")]
+    Git(String),
 }

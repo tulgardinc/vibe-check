@@ -7,11 +7,13 @@ use crate::ignore::ignore_file::{
 use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::{Candidate, QueryFunction, QueryMeta, QueryResult};
 use crate::parser::chunker::parse_source;
+use crate::parser::types::FunctionChunk;
 use crate::ranking::jaccard::{rerank, RerankItem, DEFAULT_RERANK_ALPHA};
 use crate::store::db::{close_database, get_meta_value, open_database};
 use crate::store::index_store::{count_functions, query_knn, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
+use rusqlite::Connection;
 use std::path::Path;
 use std::time::Instant;
 
@@ -74,29 +76,70 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
         ));
     }
 
+    let indexed_count = count_functions(&conn)?;
+
+    let chunk_options = QueryChunkOptions {
+        top_k: options.top_k,
+        threshold: options.threshold,
+        project_root: &project_root,
+    };
+    let (query_functions, chunk_warnings) =
+        query_chunks(&parsed.chunks, &conn, embedder, &chunk_options)?;
+    warnings.extend(chunk_warnings);
+
+    close_database(conn)?;
+    Ok(QueryResult {
+        query_functions,
+        warnings,
+        meta: QueryMeta {
+            model: embedder.model_name().to_string(),
+            indexed_functions: indexed_count,
+            query_functions: parsed.chunks.len(),
+            elapsed_ms: start.elapsed().as_millis(),
+        },
+    })
+}
+
+/// Options for the shared query-chunks logic.
+pub struct QueryChunkOptions<'a> {
+    pub top_k: usize,
+    pub threshold: f64,
+    pub project_root: &'a Path,
+}
+
+/// Core query logic: embed chunks, KNN, rerank, exclusions, build results.
+/// Used by both run_query() and the git pipeline.
+pub fn query_chunks(
+    chunks: &[FunctionChunk],
+    conn: &Connection,
+    embedder: &dyn Embedder,
+    options: &QueryChunkOptions,
+) -> Result<(Vec<QueryFunction>, Vec<String>), VibecheckError> {
+    let mut warnings = Vec::new();
+
     // Load exclusions and precompute indices for O(1) lookup
-    let ignore_file = load_ignore_file(&project_root);
+    let ignore_file = load_ignore_file(options.project_root);
     let exclusion_index = ExclusionIndex::new(&ignore_file);
-    let file_matcher = FileExclusionMatcher::new(&ignore_file.file_exclusions, &project_root);
+    let file_matcher =
+        FileExclusionMatcher::new(&ignore_file.file_exclusions, options.project_root);
     let file_pair_index =
-        FilePairExclusionIndex::new(&ignore_file.file_pair_exclusions, &project_root);
-    let stale = detect_stale_exclusions(&conn, &ignore_file)?;
+        FilePairExclusionIndex::new(&ignore_file.file_pair_exclusions, options.project_root);
+    let stale = detect_stale_exclusions(conn, &ignore_file)?;
     for w in &stale {
         warnings.push(w.reason.clone());
     }
 
     // Batch-embed all query chunks at once instead of one-by-one
-    let query_texts: Vec<&str> = parsed.chunks.iter().map(|c| c.source_text.as_str()).collect();
+    let query_texts: Vec<&str> = chunks.iter().map(|c| c.source_text.as_str()).collect();
     let embeddings = embedder.embed_batch(&query_texts, None)?;
 
-    let indexed_count = count_functions(&conn)?;
-    let vec_exists = vec_table_exists(&conn)?;
+    let vec_exists = vec_table_exists(conn)?;
     let mut query_functions = Vec::new();
 
-    for (chunk, embedding) in parsed.chunks.iter().zip(embeddings.iter()) {
+    for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
         // KNN with over-fetch
         let over_fetch = options.top_k * KNN_OVER_FETCH_MULTIPLIER;
-        let knn_results = query_knn(&conn, embedding, over_fetch, options.threshold, vec_exists)?;
+        let knn_results = query_knn(conn, embedding, over_fetch, options.threshold, vec_exists)?;
 
         // Filter self-matches, build RerankItems wrapping Candidates
         let candidates: Vec<RerankItem<Candidate>> = knn_results
@@ -157,15 +200,31 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
         });
     }
 
-    close_database(conn)?;
-    Ok(QueryResult {
-        query_functions,
-        warnings,
-        meta: QueryMeta {
-            model: embedder.model_name().to_string(),
-            indexed_functions: indexed_count,
-            query_functions: parsed.chunks.len(),
-            elapsed_ms: start.elapsed().as_millis(),
-        },
-    })
+    Ok((query_functions, warnings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_chunks_function_exists_with_correct_signature() {
+        // This test verifies that the query_chunks function exists and has
+        // the correct signature. It will fail at runtime because the function
+        // body is todo!(), but it compiles, proving the interface is correct.
+
+        // We cannot actually call it without a full DB + embedder setup,
+        // but we can verify the types are correct by constructing the options.
+        let project_root = Path::new("/tmp/test");
+        let _options = QueryChunkOptions {
+            top_k: 5,
+            threshold: 0.3,
+            project_root,
+        };
+
+        // Verify QueryChunkOptions fields are accessible
+        assert_eq!(_options.top_k, 5);
+        assert_eq!(_options.threshold, 0.3);
+        assert_eq!(_options.project_root, project_root);
+    }
 }

@@ -37,6 +37,13 @@ pub fn resolve_db_path(project_root: &Path, override_path: Option<&str>) -> Path
     }
 }
 
+/// Resolve the shared embedding cache path by finding the git common dir
+/// and appending `vibecheck-cache.db`. Returns None if not a git repo.
+pub fn resolve_cache_path(project_root: &Path) -> Option<PathBuf> {
+    let git_common_dir = crate::util::git::get_git_common_dir(project_root).ok()?;
+    Some(git_common_dir.join("vibecheck-cache.db"))
+}
+
 /// Resolve DB path and verify it exists. Used by query, scan, and status pipelines.
 pub fn resolve_existing_db(
     project_root: &Path,
