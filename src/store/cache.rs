@@ -1,6 +1,6 @@
 use crate::error::VibecheckError;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Current cache schema version. Increment when adding new migrations.
@@ -226,10 +226,120 @@ pub fn cache_stats(cache_path: &Path) -> Option<CacheStats> {
 /// Discovers worktrees via `git worktree list`, opens each .vibecheck.db,
 /// collects all content_hashes in use, deletes unreferenced cache entries.
 pub fn prune_cache(
-    _cache_path: &Path,
-    _project_root: &Path,
+    cache_path: &Path,
+    project_root: &Path,
 ) -> Result<PruneResult, VibecheckError> {
-    todo!("git-integration: not yet implemented")
+    use crate::util::config::DB_FILENAME;
+    use crate::util::git::{is_git_repo, list_worktree_paths};
+
+    // Must be a git repo
+    if !is_git_repo(project_root) {
+        return Err(VibecheckError::Git(
+            "Not a git repository. Cache prune requires git.".into(),
+        ));
+    }
+
+    // Cache must exist
+    if !cache_path.exists() {
+        return Err(VibecheckError::Index("No cache found".into()));
+    }
+
+    // Step 1: Discover worktrees
+    let worktree_paths = list_worktree_paths(project_root)?;
+
+    // Step 2: Collect referenced content hashes from all worktree DBs
+    let mut referenced_hashes: HashSet<String> = HashSet::new();
+
+    for wt_path in &worktree_paths {
+        let db_path = wt_path.join(DB_FILENAME);
+        if !db_path.exists() {
+            // Not all worktrees may be indexed; skip
+            continue;
+        }
+
+        let db_path_str = db_path.to_string_lossy();
+        // Use open_database_no_vec since we only need to read content_hash values
+        let conn = crate::store::db::open_database_no_vec(&db_path_str)?;
+
+        {
+            let mut stmt = conn.prepare("SELECT DISTINCT content_hash FROM functions")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+            for row in rows {
+                referenced_hashes.insert(row?);
+            }
+        }
+
+        crate::store::db::close_database(conn)?;
+    }
+
+    // Step 3: Open cache DB, get stats before pruning
+    let cache_size_before = std::fs::metadata(cache_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let cache_conn = Connection::open(cache_path)?;
+    configure_cache_connection(&cache_conn)?;
+
+    let total_entries_before: usize = cache_conn
+        .query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get(0))?;
+
+    // Step 4: Delete unreferenced entries
+    if referenced_hashes.is_empty() {
+        // No worktree DBs found or none have functions -- delete everything
+        cache_conn.execute("DELETE FROM embeddings", [])?;
+    } else {
+        // Build a temp table with referenced hashes for efficient deletion.
+        // This avoids constructing huge NOT IN (...) clauses.
+        cache_conn.execute_batch(
+            "CREATE TEMP TABLE _referenced_hashes (content_hash TEXT PRIMARY KEY);",
+        )?;
+
+        {
+            let tx = cache_conn.unchecked_transaction()?;
+            {
+                let mut insert_stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO _referenced_hashes (content_hash) VALUES (?)",
+                )?;
+                for hash in &referenced_hashes {
+                    insert_stmt.execute([hash])?;
+                }
+            }
+            tx.commit()?;
+        }
+
+        cache_conn.execute(
+            "DELETE FROM embeddings WHERE content_hash NOT IN (SELECT content_hash FROM _referenced_hashes)",
+            [],
+        )?;
+
+        cache_conn.execute_batch("DROP TABLE IF EXISTS _referenced_hashes;")?;
+    }
+
+    let total_entries_after: usize = cache_conn
+        .query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get(0))?;
+
+    // Checkpoint WAL to reclaim space and get accurate file size
+    cache_conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+
+    // VACUUM to actually free disk space from deleted rows
+    if total_entries_before > total_entries_after {
+        cache_conn.execute_batch("VACUUM;")?;
+    }
+
+    drop(cache_conn);
+
+    let cache_size_after = std::fs::metadata(cache_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let entries_removed = total_entries_before.saturating_sub(total_entries_after);
+    let bytes_freed = cache_size_before.saturating_sub(cache_size_after);
+
+    Ok(PruneResult {
+        entries_removed,
+        bytes_freed,
+    })
 }
 
 #[cfg(test)]
@@ -382,5 +492,217 @@ mod tests {
 
         let stats = cache_stats(&cache_path);
         assert!(stats.is_none(), "cache_stats should return None for nonexistent cache");
+    }
+
+    // --- prune_cache tests ---
+
+    /// Helper to create a git repo in a temp directory.
+    fn create_git_repo(dir: &std::path::Path) {
+        std::process::Command::new("git")
+            .args(["init", &dir.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("failed to run git init");
+
+        // Configure git user for commits (needed for some git operations)
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "config",
+                "user.email",
+                "test@test.com",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "config",
+                "user.name",
+                "Test",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok();
+    }
+
+    /// Helper to create a .vibecheck.db with given content hashes in a directory.
+    fn create_worktree_db(dir: &std::path::Path, content_hashes: &[&str]) {
+        let db_path = dir.join(".vibecheck.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        let conn = crate::store::db::open_database_no_vec(&db_path_str).unwrap();
+
+        // We need a tracked_file to insert functions (FK constraint)
+        conn.execute(
+            "INSERT OR IGNORE INTO tracked_files (file_path, content_hash, mtime_ms, indexed_at) VALUES (?, ?, ?, ?)",
+            rusqlite::params!["test.ts", "file_hash", 0, "2024-01-01T00:00:00Z"],
+        ).unwrap();
+
+        for (i, hash) in content_hashes.iter().enumerate() {
+            let id = format!("test.ts:func{}:{}", i, i + 1);
+            conn.execute(
+                "INSERT OR IGNORE INTO functions (id, file_path, function_name, source_text, start_line, end_line, params_json, return_type, is_exported, signature_hash, content_hash, chunk_type, signature, tokens_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    id,
+                    "test.ts",
+                    format!("func{}", i),
+                    format!("function func{}() {{}}", i),
+                    i + 1,
+                    i + 2,
+                    "[]",
+                    rusqlite::types::Null,
+                    0,
+                    "sig_hash",
+                    hash,
+                    "function",
+                    "",
+                    "[]",
+                ],
+            ).unwrap();
+        }
+
+        crate::store::db::close_database(conn).unwrap();
+    }
+
+    #[test]
+    fn prune_cache_removes_unreferenced_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        create_git_repo(&project_dir);
+
+        // Create a worktree DB that references hashes "hash_a" and "hash_b"
+        create_worktree_db(&project_dir, &["hash_a", "hash_b"]);
+
+        // Create a cache with "hash_a", "hash_b", "hash_c", "hash_d"
+        let cache_path = project_dir.join(".git").join("vibecheck-cache.db");
+        let cache_conn = open_cache(&cache_path, "test-model", 64, 16000, false).unwrap();
+        insert_embedding(&cache_conn, "hash_a", &[1; 256]).unwrap();
+        insert_embedding(&cache_conn, "hash_b", &[2; 256]).unwrap();
+        insert_embedding(&cache_conn, "hash_c", &[3; 256]).unwrap();
+        insert_embedding(&cache_conn, "hash_d", &[4; 256]).unwrap();
+        close_cache(cache_conn).unwrap();
+
+        // Prune should remove hash_c and hash_d (unreferenced)
+        let result = prune_cache(&cache_path, &project_dir).unwrap();
+
+        assert_eq!(
+            result.entries_removed, 2,
+            "Should have removed 2 unreferenced entries"
+        );
+        // bytes_freed may be 0 for very small databases where VACUUM doesn't shrink the file
+        // The important check is entries_removed
+
+        // Verify remaining entries
+        let conn = Connection::open(&cache_path).unwrap();
+        let count: usize = conn
+            .query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "Should have 2 entries remaining");
+    }
+
+    #[test]
+    fn prune_cache_all_referenced_removes_nothing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        create_git_repo(&project_dir);
+
+        // Worktree DB references the same hashes as the cache
+        create_worktree_db(&project_dir, &["hash_a", "hash_b"]);
+
+        let cache_path = project_dir.join(".git").join("vibecheck-cache.db");
+        let cache_conn = open_cache(&cache_path, "test-model", 64, 16000, false).unwrap();
+        insert_embedding(&cache_conn, "hash_a", &[1; 64]).unwrap();
+        insert_embedding(&cache_conn, "hash_b", &[2; 64]).unwrap();
+        close_cache(cache_conn).unwrap();
+
+        let result = prune_cache(&cache_path, &project_dir).unwrap();
+
+        assert_eq!(
+            result.entries_removed, 0,
+            "No entries should be removed when all are referenced"
+        );
+    }
+
+    #[test]
+    fn prune_cache_no_worktree_db_removes_all() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        create_git_repo(&project_dir);
+
+        // No .vibecheck.db in the worktree
+        let cache_path = project_dir.join(".git").join("vibecheck-cache.db");
+        let cache_conn = open_cache(&cache_path, "test-model", 64, 16000, false).unwrap();
+        insert_embedding(&cache_conn, "hash_a", &[1; 64]).unwrap();
+        insert_embedding(&cache_conn, "hash_b", &[2; 64]).unwrap();
+        close_cache(cache_conn).unwrap();
+
+        let result = prune_cache(&cache_path, &project_dir).unwrap();
+
+        assert_eq!(
+            result.entries_removed, 2,
+            "All entries removed when no worktree DB exists"
+        );
+    }
+
+    #[test]
+    fn prune_cache_not_a_git_repo_errors() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache_path = tmp.path().join("vibecheck-cache.db");
+
+        // Create a dummy cache file so the "no cache" check doesn't trigger first
+        std::fs::write(&cache_path, b"dummy").unwrap();
+
+        let result = prune_cache(&cache_path, tmp.path());
+        assert!(result.is_err(), "Should error outside a git repo");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Not a git repository"),
+            "Error should mention not a git repo, got: {err}"
+        );
+    }
+
+    #[test]
+    fn prune_cache_no_cache_exists_errors() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        create_git_repo(&project_dir);
+
+        let cache_path = project_dir.join(".git").join("vibecheck-cache.db");
+        // Don't create the cache file
+
+        let result = prune_cache(&cache_path, &project_dir);
+        assert!(result.is_err(), "Should error when no cache exists");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No cache found"),
+            "Error should mention no cache found, got: {err}"
+        );
+    }
+
+    #[test]
+    fn prune_cache_empty_cache_returns_zero() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        create_git_repo(&project_dir);
+
+        // Create an empty cache (no entries)
+        let cache_path = project_dir.join(".git").join("vibecheck-cache.db");
+        let cache_conn = open_cache(&cache_path, "test-model", 64, 16000, false).unwrap();
+        close_cache(cache_conn).unwrap();
+
+        let result = prune_cache(&cache_path, &project_dir).unwrap();
+
+        assert_eq!(result.entries_removed, 0);
     }
 }

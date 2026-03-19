@@ -13,6 +13,7 @@ use crate::store::db::{close_database, get_meta_value, open_database};
 use crate::store::index_store::{count_functions, query_knn, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
+use crate::util::git::check_staleness;
 use rusqlite::Connection;
 use std::path::Path;
 use std::time::Instant;
@@ -74,6 +75,11 @@ pub fn run_query(options: QueryOptions) -> Result<QueryResult, VibecheckError> {
             stored_model,
             embedder.model_name()
         ));
+    }
+
+    // Check index staleness against current HEAD
+    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
+        warnings.push(staleness_warning);
     }
 
     let indexed_count = count_functions(&conn)?;

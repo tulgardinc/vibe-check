@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 use vibecheck::core::index_pipeline::{run_index, IndexOptions};
 use vibecheck::core::query_pipeline::{run_query, QueryOptions};
@@ -350,4 +351,243 @@ fn empty_project_returns_zero() {
 
     assert_eq!(result.files_scanned, 0);
     assert_eq!(result.functions_indexed, 0);
+}
+
+/// A counting mock embedder that tracks how many inputs were embedded via embed_batch.
+struct CountingMockEmbedder {
+    inner: MockEmbedder,
+    embed_count: AtomicUsize,
+}
+
+impl CountingMockEmbedder {
+    fn new(dimensions: usize) -> Self {
+        Self {
+            inner: MockEmbedder::new(dimensions),
+            embed_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn embed_call_count(&self) -> usize {
+        self.embed_count.load(Ordering::SeqCst)
+    }
+}
+
+impl Embedder for CountingMockEmbedder {
+    fn model_name(&self) -> &str {
+        self.inner.model_name()
+    }
+
+    fn dimensions(&self) -> usize {
+        self.inner.dimensions()
+    }
+
+    fn tier(&self) -> &str {
+        self.inner.tier()
+    }
+
+    fn embed_batch(
+        &self,
+        inputs: &[&str],
+        on_progress: Option<&dyn Fn(usize, usize)>,
+    ) -> Result<Vec<Vec<f32>>, VibecheckError> {
+        self.embed_count.fetch_add(inputs.len(), Ordering::SeqCst);
+        self.inner.embed_batch(inputs, on_progress)
+    }
+
+    fn embed_query(&self, input: &str) -> Result<Vec<f32>, VibecheckError> {
+        self.inner.embed_query(input)
+    }
+}
+
+fn setup_git_repo(dir: &std::path::Path) {
+    std::process::Command::new("git")
+        .args(["init", &dir.to_string_lossy()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("failed to run git init");
+    std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "config", "user.email", "test@test.com"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok();
+    std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "config", "user.name", "Test"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok();
+}
+
+/// Test that cache hits skip Ollama calls.
+/// First index populates the cache. Delete the DB, then re-index.
+/// The second index should find cache hits and skip Ollama entirely.
+#[test]
+fn cache_hits_skip_ollama_calls() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    setup_git_repo(dir);
+
+    write_ts_file(
+        dir,
+        "math.ts",
+        r#"
+export function add(a: number, b: number): number {
+    return a + b;
+}
+
+export function subtract(a: number, b: number): number {
+    return a - b;
+}
+"#,
+    );
+
+    let db_path = dir.join(".vibecheck.db").to_string_lossy().to_string();
+    let dims = 64;
+
+    // First index: all functions go through Ollama, populating the cache
+    run_index(IndexOptions {
+        path: Some(dir.to_string_lossy().to_string()),
+        db_path: Some(db_path.clone()),
+        force: false,
+        ollama: OllamaConfig::default(),
+        progress: None,
+        cancel: None,
+        embedder: Some(Box::new(MockEmbedder::new(dims))),
+    })
+    .unwrap();
+
+    // Verify cache was populated
+    let cache_path = dir.join(".git").join("vibecheck-cache.db");
+    assert!(cache_path.exists(), "Cache should exist after first index");
+    let stats = vibecheck::store::cache::cache_stats(&cache_path).unwrap();
+    assert!(stats.entry_count >= 2, "Cache should have at least 2 entries");
+
+    // Delete the index DB to force re-embedding
+    std::fs::remove_file(&db_path).unwrap();
+    // Also remove WAL/SHM files if they exist
+    let _ = std::fs::remove_file(format!("{db_path}-wal"));
+    let _ = std::fs::remove_file(format!("{db_path}-shm"));
+
+    // Second index: should find cache hits and skip Ollama
+    let embedder2 = std::sync::Arc::new(CountingMockEmbedder::new(dims));
+    let embedder2_clone = embedder2.clone();
+    run_index(IndexOptions {
+        path: Some(dir.to_string_lossy().to_string()),
+        db_path: Some(db_path.clone()),
+        force: false,
+        ollama: OllamaConfig::default(),
+        progress: None,
+        cancel: None,
+        embedder: Some(Box::new(ArcEmbedder(embedder2.clone()))),
+    })
+    .unwrap();
+
+    // With cache hits, the embedder should NOT have been called
+    let count2 = embedder2_clone.embed_call_count();
+    assert_eq!(
+        count2, 0,
+        "Cache hits should skip Ollama; expected 0 embed calls but got {count2}"
+    );
+}
+
+/// Wrapper to use Arc<CountingMockEmbedder> as Box<dyn Embedder>
+struct ArcEmbedder(std::sync::Arc<CountingMockEmbedder>);
+
+impl Embedder for ArcEmbedder {
+    fn model_name(&self) -> &str { self.0.model_name() }
+    fn dimensions(&self) -> usize { self.0.dimensions() }
+    fn tier(&self) -> &str { self.0.tier() }
+    fn embed_batch(
+        &self,
+        inputs: &[&str],
+        on_progress: Option<&dyn Fn(usize, usize)>,
+    ) -> Result<Vec<Vec<f32>>, VibecheckError> {
+        self.0.embed_batch(inputs, on_progress)
+    }
+    fn embed_query(&self, input: &str) -> Result<Vec<f32>, VibecheckError> {
+        self.0.embed_query(input)
+    }
+}
+
+/// Test that cache misses are written to the cache.
+#[test]
+fn cache_misses_are_written_to_cache() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    setup_git_repo(dir);
+
+    write_ts_file(
+        dir,
+        "utils.ts",
+        r#"
+export function greet(name: string): string {
+    return "Hello " + name;
+}
+"#,
+    );
+
+    let db_path = dir.join(".vibecheck.db").to_string_lossy().to_string();
+
+    run_index(IndexOptions {
+        path: Some(dir.to_string_lossy().to_string()),
+        db_path: Some(db_path.clone()),
+        force: false,
+        ollama: OllamaConfig::default(),
+        progress: None,
+        cancel: None,
+        embedder: Some(Box::new(MockEmbedder::new(64))),
+    })
+    .unwrap();
+
+    // Check that the cache DB was created and has entries
+    let cache_path = dir.join(".git").join("vibecheck-cache.db");
+    assert!(cache_path.exists(), "Cache DB should exist after indexing in a git repo");
+
+    let stats = vibecheck::store::cache::cache_stats(&cache_path);
+    assert!(stats.is_some(), "cache_stats should return Some");
+    let stats = stats.unwrap();
+    assert!(stats.entry_count > 0, "Cache should have entries after indexing");
+}
+
+/// Test that non-git projects skip cache entirely.
+#[test]
+fn non_git_project_skips_cache() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    // Use setup_project which creates a fake .git dir (not a real git repo)
+    setup_project(dir);
+
+    write_ts_file(
+        dir,
+        "app.ts",
+        r#"
+export function run(): void {
+    console.log("running");
+}
+"#,
+    );
+
+    let db_path = dir.join(".vibecheck.db").to_string_lossy().to_string();
+
+    let result = run_index(IndexOptions {
+        path: Some(dir.to_string_lossy().to_string()),
+        db_path: Some(db_path.clone()),
+        force: false,
+        ollama: OllamaConfig::default(),
+        progress: None,
+        cancel: None,
+        embedder: Some(Box::new(MockEmbedder::new(64))),
+    })
+    .unwrap();
+
+    assert!(result.functions_indexed >= 1, "Should have indexed functions");
+
+    // No cache DB should exist since it's not a real git repo
+    let cache_path = dir.join(".git").join("vibecheck-cache.db");
+    assert!(
+        !cache_path.exists(),
+        "Cache DB should NOT exist for non-git projects"
+    );
 }

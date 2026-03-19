@@ -194,6 +194,10 @@ pub struct StatusResult {
     pub stale_exclusions: usize,
     pub file_exclusions: usize,
     pub file_pair_exclusions: usize,
+    pub cache_exists: bool,
+    pub cache_path: String,
+    pub cache_entry_count: usize,
+    pub cache_size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

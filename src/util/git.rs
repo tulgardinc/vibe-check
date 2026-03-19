@@ -260,6 +260,50 @@ pub fn read_working_tree_file(
     })
 }
 
+/// Discover all worktree paths by running `git worktree list --porcelain`.
+/// Each worktree block starts with `worktree <path>`. Collects all paths.
+pub fn list_worktree_paths(project_root: &Path) -> Result<Vec<PathBuf>, VibecheckError> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &project_root.to_string_lossy(),
+            "worktree",
+            "list",
+            "--porcelain",
+        ])
+        .output()
+        .map_err(|e| {
+            VibecheckError::Git(format!("failed to run git worktree list: {e}"))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VibecheckError::Git(format!(
+            "git worktree list --porcelain failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_worktree_list_output(&stdout))
+}
+
+/// Parse the porcelain output of `git worktree list --porcelain`.
+/// Each block starts with `worktree <path>`, followed by other metadata lines,
+/// separated by blank lines.
+fn parse_worktree_list_output(output: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if let Some(path_str) = line.strip_prefix("worktree ") {
+            let path_str = path_str.trim();
+            if !path_str.is_empty() {
+                paths.push(PathBuf::from(path_str));
+            }
+        }
+    }
+    paths
+}
+
 /// Check index staleness: compare stored head_commit with current HEAD.
 /// Returns a warning string if stale, None if fresh or not a git repo.
 pub fn check_staleness(conn: &Connection, project_root: &Path) -> Option<String> {
@@ -375,6 +419,58 @@ mod tests {
         let result = check_staleness(&conn, tmp.path());
         // In a non-git directory, check_staleness should return None (not a git repo)
         assert!(result.is_none(), "Expected None in a non-git directory");
+    }
+
+    // --- parse_worktree_list_output tests ---
+
+    #[test]
+    fn parse_worktree_list_output_single_worktree() {
+        let output = "worktree /home/user/project\nHEAD abc123\nbranch refs/heads/main\n\n";
+        let paths = parse_worktree_list_output(output);
+        assert_eq!(paths, vec![PathBuf::from("/home/user/project")]);
+    }
+
+    #[test]
+    fn parse_worktree_list_output_multiple_worktrees() {
+        let output = "\
+worktree /home/user/project
+HEAD abc123
+branch refs/heads/main
+
+worktree /home/user/project/.worktrees/feature-a
+HEAD def456
+branch refs/heads/feature-a
+
+worktree /home/user/project/.worktrees/feature-b
+HEAD 789012
+branch refs/heads/feature-b
+
+";
+        let paths = parse_worktree_list_output(output);
+        assert_eq!(paths.len(), 3);
+        assert_eq!(paths[0], PathBuf::from("/home/user/project"));
+        assert_eq!(
+            paths[1],
+            PathBuf::from("/home/user/project/.worktrees/feature-a")
+        );
+        assert_eq!(
+            paths[2],
+            PathBuf::from("/home/user/project/.worktrees/feature-b")
+        );
+    }
+
+    #[test]
+    fn parse_worktree_list_output_empty() {
+        let paths = parse_worktree_list_output("");
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn parse_worktree_list_output_bare_repo_line() {
+        // A bare repo may show "worktree" lines differently; ensure we handle it.
+        let output = "worktree /home/user/project\nHEAD abc123\nbranch refs/heads/main\nbare\n\n";
+        let paths = parse_worktree_list_output(output);
+        assert_eq!(paths, vec![PathBuf::from("/home/user/project")]);
     }
 
     #[test]

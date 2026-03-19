@@ -1,17 +1,19 @@
-use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig};
+use crate::embedder::types::{resolve_embedder, Embedder, OllamaConfig, DEFAULT_MAX_INPUT_BYTES};
 use crate::error::VibecheckError;
 use crate::output::types::IndexResult;
 use crate::parser::chunker::{parse_file, parse_source};
+use crate::store::cache;
 use crate::store::db::{close_database, get_meta_value, open_database, set_meta_value};
 use crate::store::file_tracker::{
     compute_changed_files, remove_tracked_file, upsert_tracked_file,
 };
 use crate::store::index_store::{
-    delete_functions_for_file, get_functions_without_embeddings, update_embedding,
-    upsert_functions, vec_table_exists,
+    bytes_to_embedding, delete_functions_for_file, get_functions_without_embeddings,
+    update_embedding, upsert_functions, vec_table_exists,
 };
 use crate::ignore::ignore_file::{load_ignore_file, FileExclusionMatcher};
-use crate::util::config::{find_project_root, find_source_files, resolve_db_path};
+use crate::util::config::{find_project_root, find_source_files, resolve_cache_path, resolve_db_path};
+use crate::util::git::{get_head_commit, is_git_repo};
 use crate::util::hash::sha256;
 use crate::util::logger;
 use rayon::prelude::*;
@@ -214,16 +216,90 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     // Embed unembedded functions in batches
     let unembedded = get_functions_without_embeddings(&conn)?;
     if !unembedded.is_empty() {
-        let total = unembedded.len();
         let vec_exists = vec_table_exists(&conn)?;
-        let total_batches = (total + INDEX_EMBED_BATCH_SIZE - 1) / INDEX_EMBED_BATCH_SIZE;
+
+        // Try to open embedding cache if in a git repo (graceful fallback)
+        let cache_conn = if is_git_repo(&project_root) {
+            match resolve_cache_path(&project_root) {
+                Some(cache_path) => {
+                    let max_input_bytes = options.ollama.max_input_bytes.unwrap_or(DEFAULT_MAX_INPUT_BYTES);
+                    match cache::open_cache(
+                        &cache_path,
+                        embedder.model_name(),
+                        embedder.dimensions(),
+                        max_input_bytes,
+                        options.force,
+                    ) {
+                        Ok(c) => {
+                            logger::info("Embedding cache opened.");
+                            Some(c)
+                        }
+                        Err(e) => {
+                            logger::warn(&format!("Could not open embedding cache: {e}"));
+                            None
+                        }
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        // Batch-lookup cached embeddings by content_hash
+        let cached_embeddings = if let Some(ref cc) = cache_conn {
+            let content_hashes: Vec<&str> =
+                unembedded.iter().map(|f| f.content_hash.as_str()).collect();
+            match cache::lookup_embeddings(cc, &content_hashes) {
+                Ok(hits) => hits,
+                Err(e) => {
+                    logger::warn(&format!("Cache lookup failed: {e}"));
+                    std::collections::HashMap::new()
+                }
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        // Separate cache hits from misses
+        let mut cache_hit_funcs = Vec::new();
+        let mut cache_miss_funcs = Vec::new();
+        for func in &unembedded {
+            if let Some(embedding_bytes) = cached_embeddings.get(&func.content_hash) {
+                cache_hit_funcs.push((func, embedding_bytes.clone()));
+            } else {
+                cache_miss_funcs.push(func);
+            }
+        }
+
+        if !cache_hit_funcs.is_empty() {
+            logger::info(&format!(
+                "Cache hit for {} of {} functions.",
+                cache_hit_funcs.len(),
+                unembedded.len()
+            ));
+        }
+
+        // Apply cache hits: write cached embeddings directly to the index DB
+        if !cache_hit_funcs.is_empty() {
+            let tx = conn.transaction()?;
+            for (func, embedding_bytes) in &cache_hit_funcs {
+                let embedding = bytes_to_embedding(embedding_bytes);
+                update_embedding(&tx, &func.id, &embedding, vec_exists)?;
+            }
+            tx.commit()?;
+        }
+
+        // Embed cache misses via Ollama in batches
+        let total_misses = cache_miss_funcs.len();
+        let total_batches = (total_misses + INDEX_EMBED_BATCH_SIZE - 1) / INDEX_EMBED_BATCH_SIZE;
 
         if let Some(ref progress) = options.progress {
             progress.on_start(total_batches);
         }
 
         let mut cancelled = false;
-        for batch in unembedded.chunks(INDEX_EMBED_BATCH_SIZE) {
+        for batch in cache_miss_funcs.chunks(INDEX_EMBED_BATCH_SIZE) {
             if let Some(ref cancel) = options.cancel
                 && cancel.load(Ordering::Relaxed)
             {
@@ -238,6 +314,17 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
             let tx = conn.transaction()?;
             for (func, embedding) in batch.iter().zip(embeddings.iter()) {
                 update_embedding(&tx, &func.id, embedding, vec_exists)?;
+
+                // Write to cache for future use
+                if let Some(ref cc) = cache_conn {
+                    let embedding_bytes: Vec<u8> = embedding
+                        .iter()
+                        .flat_map(|f| f.to_le_bytes())
+                        .collect();
+                    if let Err(e) = cache::insert_embedding(cc, &func.content_hash, &embedding_bytes) {
+                        logger::warn(&format!("Failed to write to cache: {e}"));
+                    }
+                }
             }
             tx.commit()?;
 
@@ -250,8 +337,16 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
             progress.on_done();
         }
 
+        let total = unembedded.len();
         if !cancelled {
             logger::success(&format!("Embedded {total} functions."));
+        }
+
+        // Close cache connection
+        if let Some(cc) = cache_conn {
+            if let Err(e) = cache::close_cache(cc) {
+                logger::warn(&format!("Failed to close embedding cache: {e}"));
+            }
         }
     } else if let Some(ref progress) = options.progress {
         // Clear the indexing spinner when there's nothing to embed
@@ -273,6 +368,12 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
     )?;
     if get_meta_value(&tx, "created_at")?.is_none() {
         set_meta_value(&tx, "created_at", &chrono::Utc::now().to_rfc3339())?;
+    }
+    // Store the current HEAD commit hash so query/scan can detect staleness
+    if is_git_repo(&project_root) {
+        if let Ok(head) = get_head_commit(&project_root) {
+            set_meta_value(&tx, "head_commit", &head)?;
+        }
     }
     tx.commit()?;
 

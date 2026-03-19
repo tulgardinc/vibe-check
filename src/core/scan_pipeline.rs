@@ -8,6 +8,7 @@ use crate::store::db::{close_database, get_meta_value, open_database};
 use crate::store::index_store::{get_embedded_functions_slim, query_knn_raw, vec_table_exists};
 use crate::store::types::should_filter_neighbor;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
+use crate::util::git::check_staleness;
 use crate::util::logger;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -32,6 +33,12 @@ pub fn run_scan(options: ScanOptions) -> Result<ScanResult, VibecheckError> {
 
     let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
     let conn = open_database(&db_path)?;
+
+    // Check index staleness against current HEAD
+    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
+        logger::warn(&staleness_warning);
+    }
+
     let mut embedded = get_embedded_functions_slim(&conn)?;
     let ignore_file = load_ignore_file(&project_root);
     let exclusion_index = ExclusionIndex::new(&ignore_file);

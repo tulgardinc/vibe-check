@@ -95,10 +95,20 @@ pub fn format_status_human(result: &StatusResult) -> String {
         String::new()
     };
 
+    let cache_info = if result.cache_exists {
+        let cache_mb = result.cache_size_bytes as f64 / 1024.0 / 1024.0;
+        format!(
+            "\nCache: {} ({:.1} MB, {} entries)",
+            result.cache_path, cache_mb, result.cache_entry_count
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        "Database: {} ({:.1} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}{}{}",
+        "Database: {} ({:.1} MB)\nModel: {}\nDimensions: {}\nIndexed functions: {}{}\nTracked files: {}\nLast indexed: {}\nExclusions: {}{}{}{}{}",
         result.db_path, size_mb, result.model, result.dimensions,
         result.indexed_functions, unembedded, result.tracked_files,
-        result.last_indexed, result.exclusions, stale, file_excl, file_pair_excl
+        result.last_indexed, result.exclusions, stale, file_excl, file_pair_excl, cache_info
     )
 }

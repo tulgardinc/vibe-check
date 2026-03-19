@@ -1,3 +1,4 @@
+pub mod git_pipeline;
 pub mod index_pipeline;
 pub mod query_pipeline;
 pub mod scan_pipeline;

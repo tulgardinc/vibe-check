@@ -2,10 +2,11 @@ use crate::error::VibecheckError;
 use crate::ignore::ignore_file::load_ignore_file;
 use crate::ignore::stale_detector::detect_stale_exclusions;
 use crate::output::types::StatusResult;
+use crate::store::cache::cache_stats;
 use crate::store::db::{close_database, get_meta_value, open_database_no_vec};
 use crate::store::file_tracker::get_tracked_files;
 use crate::store::index_store::{count_functions, count_functions_without_embeddings};
-use crate::util::config::{find_project_root, DB_FILENAME};
+use crate::util::config::{find_project_root, resolve_cache_path, DB_FILENAME};
 use std::fs;
 use std::path::Path;
 
@@ -35,6 +36,10 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
             stale_exclusions: 0,
             file_exclusions: 0,
             file_pair_exclusions: 0,
+            cache_exists: false,
+            cache_path: String::new(),
+            cache_entry_count: 0,
+            cache_size_bytes: 0,
         });
     }
 
@@ -61,6 +66,22 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
     let stale = detect_stale_exclusions(&conn, &ignore_file)?;
 
     close_database(conn)?;
+
+    // Check for shared embedding cache
+    let (cache_exists, cache_path_str, cache_entry_count, cache_size_bytes) =
+        match resolve_cache_path(&project_root) {
+            Some(cp) => match cache_stats(&cp) {
+                Some(stats) => (
+                    true,
+                    cp.to_string_lossy().to_string(),
+                    stats.entry_count,
+                    stats.size_bytes,
+                ),
+                None => (false, cp.to_string_lossy().to_string(), 0, 0),
+            },
+            None => (false, String::new(), 0, 0),
+        };
+
     Ok(StatusResult {
         exists: true,
         db_path,
@@ -75,5 +96,9 @@ pub fn run_status(options: StatusOptions) -> Result<StatusResult, VibecheckError
         stale_exclusions: stale.len(),
         file_exclusions: file_exclusion_count,
         file_pair_exclusions: file_pair_exclusion_count,
+        cache_exists,
+        cache_path: cache_path_str,
+        cache_entry_count,
+        cache_size_bytes,
     })
 }
