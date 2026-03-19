@@ -10,7 +10,7 @@ use crate::store::index_store::count_functions;
 use crate::util::config::{resolve_existing_db, resolve_project_root};
 use crate::util::git::{
     check_staleness, diff_commit, diff_working_tree, is_git_repo, read_working_tree_file,
-    show_file, DiffStatus,
+    show_file, DiffEntry, DiffStatus,
 };
 use crate::util::hash::sha256;
 use std::collections::{HashMap, HashSet};
@@ -38,21 +38,107 @@ pub struct CommitQueryOptions {
 /// Query uncommitted changes for duplicates.
 /// Returns the same QueryResult as vibec query.
 pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckError> {
-    let start = Instant::now();
-
     let project_root = resolve_project_root(options.project_root.as_deref());
 
+    // Get diff entries from working tree
+    let diff_entries = diff_working_tree(&project_root)?;
+
+    run_diff_query(
+        DiffQueryParams {
+            top_k: options.top_k,
+            threshold: options.threshold,
+            db_path: options.db_path,
+            ollama: options.ollama,
+            embedder: options.embedder,
+        },
+        &project_root,
+        diff_entries,
+        |path| read_working_tree_file(&project_root, path),
+        |entry, path| {
+            if entry.status == DiffStatus::Added {
+                Ok(None)
+            } else {
+                show_file(&project_root, "HEAD", path)
+            }
+        },
+    )
+}
+
+/// Query a specific commit's changes for duplicates against the current index.
+/// Returns the same QueryResult as vibec query.
+pub fn run_commit_query(options: CommitQueryOptions) -> Result<QueryResult, VibecheckError> {
+    let project_root = resolve_project_root(options.project_root.as_deref());
+    let hash = options.hash.clone();
+    let parent_rev = format!("{}^1", hash);
+
+    // Get diff entries for the commit
+    let diff_entries = diff_commit(&project_root, &hash)?;
+
+    run_diff_query(
+        DiffQueryParams {
+            top_k: options.top_k,
+            threshold: options.threshold,
+            db_path: options.db_path,
+            ollama: options.ollama,
+            embedder: options.embedder,
+        },
+        &project_root,
+        diff_entries,
+        |path| {
+            show_file(&project_root, &hash, path)?
+                .ok_or_else(|| VibecheckError::Git(format!(
+                    "file '{}' not found at revision {}", path, hash
+                )))
+        },
+        |entry, path| {
+            if entry.status == DiffStatus::Added {
+                Ok(None)
+            } else {
+                show_file(&project_root, &parent_rev, path)
+            }
+        },
+    )
+}
+
+/// Shared parameters for diff-based queries.
+struct DiffQueryParams {
+    top_k: usize,
+    threshold: f64,
+    db_path: Option<String>,
+    ollama: OllamaConfig,
+    embedder: Option<Box<dyn Embedder>>,
+}
+
+/// Shared implementation for both `run_git_query` and `run_commit_query`.
+///
+/// Parameterized by:
+/// - `diff_entries`: the list of changed files
+/// - `read_new`: how to read the "new" version of a file (returns the source string)
+/// - `read_old`: how to read the "old" version of a file (returns `None` if it didn't exist)
+fn run_diff_query<FNew, FOld>(
+    params: DiffQueryParams,
+    project_root: &std::path::Path,
+    diff_entries: Vec<DiffEntry>,
+    read_new: FNew,
+    read_old: FOld,
+) -> Result<QueryResult, VibecheckError>
+where
+    FNew: Fn(&str) -> Result<String, VibecheckError>,
+    FOld: Fn(&DiffEntry, &str) -> Result<Option<String>, VibecheckError>,
+{
+    let start = Instant::now();
+
     // Validate git repo
-    if !is_git_repo(&project_root) {
+    if !is_git_repo(project_root) {
         return Err(VibecheckError::Git(
             "Not a git repository. These commands require git.".into(),
         ));
     }
 
     // Open DB and resolve embedder
-    let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
+    let db_path = resolve_existing_db(project_root, params.db_path.as_deref())?;
     let conn = open_database(&db_path)?;
-    let (embedder_box, _) = resolve_embedder(options.embedder, &options.ollama)?;
+    let (embedder_box, _) = resolve_embedder(params.embedder, &params.ollama)?;
     let embedder: &dyn Embedder = embedder_box.as_ref();
 
     let mut warnings = Vec::new();
@@ -70,12 +156,9 @@ pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckE
     }
 
     // Check index staleness
-    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
+    if let Some(staleness_warning) = check_staleness(&conn, project_root) {
         warnings.push(staleness_warning);
     }
-
-    // Get diff entries from working tree
-    let diff_entries = diff_working_tree(&project_root)?;
 
     // Filter to supported file extensions
     let diff_entries: Vec<_> = diff_entries
@@ -89,18 +172,14 @@ pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckE
     for entry in &diff_entries {
         match entry.status {
             DiffStatus::Added | DiffStatus::Modified => {
-                // Read NEW version from filesystem
-                let new_source = read_working_tree_file(&project_root, &entry.path)?;
+                // Read NEW version
+                let new_source = read_new(&entry.path)?;
                 let new_parsed = parse_source(&new_source, &entry.path);
 
-                // Read OLD version from HEAD (None for new files -> empty old chunks)
-                let old_chunks = if entry.status == DiffStatus::Added {
-                    vec![]
-                } else {
-                    match show_file(&project_root, "HEAD", &entry.path)? {
-                        Some(old_source) => parse_source(&old_source, &entry.path).chunks,
-                        None => vec![],
-                    }
+                // Read OLD version (None for new files -> empty old chunks)
+                let old_chunks = match read_old(entry, &entry.path)? {
+                    Some(old_source) => parse_source(&old_source, &entry.path).chunks,
+                    None => vec![],
                 };
 
                 let file_diff = compare_chunks(&old_chunks, &new_parsed.chunks);
@@ -109,7 +188,7 @@ pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckE
             }
             DiffStatus::Deleted => {
                 // Parse OLD version, all functions go into removed set
-                if let Some(old_source) = show_file(&project_root, "HEAD", &entry.path)? {
+                if let Some(old_source) = read_old(entry, &entry.path)? {
                     let old_parsed = parse_source(&old_source, &entry.path);
                     for chunk in &old_parsed.chunks {
                         all_removed.insert((
@@ -142,158 +221,23 @@ pub fn run_git_query(options: GitQueryOptions) -> Result<QueryResult, VibecheckE
 
     // Call query_chunks with the collected chunks
     let chunk_options = QueryChunkOptions {
-        top_k: options.top_k,
-        threshold: options.threshold,
-        project_root: &project_root,
+        top_k: params.top_k,
+        threshold: params.threshold,
+        project_root,
     };
     let (mut query_functions, chunk_warnings) =
         query_chunks(&all_query_chunks, &conn, embedder, &chunk_options)?;
     warnings.extend(chunk_warnings);
 
     // Post-filter: remove candidates where (candidate.path, candidate.name) is in the removed set
-    for qf in &mut query_functions {
-        qf.candidates
-            .retain(|c| !all_removed.contains(&(c.path.clone(), c.name.clone())));
-    }
-
-    close_database(conn)?;
-
-    Ok(QueryResult {
-        query_functions,
-        warnings,
-        meta: QueryMeta {
-            model: embedder.model_name().to_string(),
-            indexed_functions: indexed_count,
-            query_functions: query_count,
-            elapsed_ms: start.elapsed().as_millis(),
-        },
-    })
-}
-
-/// Query a specific commit's changes for duplicates against the current index.
-/// Returns the same QueryResult as vibec query.
-pub fn run_commit_query(options: CommitQueryOptions) -> Result<QueryResult, VibecheckError> {
-    let start = Instant::now();
-
-    let project_root = resolve_project_root(options.project_root.as_deref());
-
-    // Validate git repo
-    if !is_git_repo(&project_root) {
-        return Err(VibecheckError::Git(
-            "Not a git repository. These commands require git.".into(),
-        ));
-    }
-
-    // Open DB and resolve embedder
-    let db_path = resolve_existing_db(&project_root, options.db_path.as_deref())?;
-    let conn = open_database(&db_path)?;
-    let (embedder_box, _) = resolve_embedder(options.embedder, &options.ollama)?;
-    let embedder: &dyn Embedder = embedder_box.as_ref();
-
-    let mut warnings = Vec::new();
-
-    // Check model mismatch
-    if let Some(stored_model) = get_meta_value(&conn, "model_name")?
-        && stored_model != embedder.model_name()
-    {
-        warnings.push(format!(
-            "Model mismatch: index was built with '{}' but current model is '{}'. \
-             Results may be inaccurate.",
-            stored_model,
-            embedder.model_name()
-        ));
-    }
-
-    // Check index staleness
-    if let Some(staleness_warning) = check_staleness(&conn, &project_root) {
-        warnings.push(staleness_warning);
-    }
-
-    // Get diff entries for the commit
-    let diff_entries = diff_commit(&project_root, &options.hash)?;
-
-    // Filter to supported file extensions
-    let diff_entries: Vec<_> = diff_entries
-        .into_iter()
-        .filter(|e| registry::language_for_file(&e.path).is_some())
+    // Build a borrowed reference set to avoid cloning strings for each lookup
+    let removed_refs: HashSet<(&str, &str)> = all_removed
+        .iter()
+        .map(|(p, n)| (p.as_str(), n.as_str()))
         .collect();
-
-    let mut all_query_chunks = Vec::new();
-    let mut all_removed: HashSet<(String, String)> = HashSet::new();
-
-    let parent_rev = format!("{}^1", options.hash);
-
-    for entry in &diff_entries {
-        match entry.status {
-            DiffStatus::Added | DiffStatus::Modified => {
-                // Read NEW version from the commit
-                let new_source = match show_file(&project_root, &options.hash, &entry.path)? {
-                    Some(s) => s,
-                    None => continue,
-                };
-                let new_parsed = parse_source(&new_source, &entry.path);
-
-                // Read OLD version from the parent commit (None for new files -> empty old chunks)
-                let old_chunks = if entry.status == DiffStatus::Added {
-                    vec![]
-                } else {
-                    match show_file(&project_root, &parent_rev, &entry.path)? {
-                        Some(old_source) => parse_source(&old_source, &entry.path).chunks,
-                        None => vec![],
-                    }
-                };
-
-                let file_diff = compare_chunks(&old_chunks, &new_parsed.chunks);
-                all_query_chunks.extend(file_diff.query_chunks);
-                all_removed.extend(file_diff.removed);
-            }
-            DiffStatus::Deleted => {
-                // Parse OLD version from the parent, all functions go into removed set
-                if let Some(old_source) = show_file(&project_root, &parent_rev, &entry.path)? {
-                    let old_parsed = parse_source(&old_source, &entry.path);
-                    for chunk in &old_parsed.chunks {
-                        all_removed.insert((
-                            chunk.file_path.clone(),
-                            chunk.function_name.clone(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    let indexed_count = count_functions(&conn)?;
-    let query_count = all_query_chunks.len();
-
-    // If no query chunks, return empty result
-    if all_query_chunks.is_empty() {
-        close_database(conn)?;
-        return Ok(QueryResult {
-            query_functions: vec![],
-            warnings,
-            meta: QueryMeta {
-                model: embedder.model_name().to_string(),
-                indexed_functions: indexed_count,
-                query_functions: 0,
-                elapsed_ms: start.elapsed().as_millis(),
-            },
-        });
-    }
-
-    // Call query_chunks with the collected chunks
-    let chunk_options = QueryChunkOptions {
-        top_k: options.top_k,
-        threshold: options.threshold,
-        project_root: &project_root,
-    };
-    let (mut query_functions, chunk_warnings) =
-        query_chunks(&all_query_chunks, &conn, embedder, &chunk_options)?;
-    warnings.extend(chunk_warnings);
-
-    // Post-filter: remove candidates where (candidate.path, candidate.name) is in the removed set
     for qf in &mut query_functions {
         qf.candidates
-            .retain(|c| !all_removed.contains(&(c.path.clone(), c.name.clone())));
+            .retain(|c| !removed_refs.contains(&(c.path.as_str(), c.name.as_str())));
     }
 
     close_database(conn)?;

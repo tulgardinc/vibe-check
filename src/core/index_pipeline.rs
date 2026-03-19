@@ -292,7 +292,7 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
 
         // Embed cache misses via Ollama in batches
         let total_misses = cache_miss_funcs.len();
-        let total_batches = (total_misses + INDEX_EMBED_BATCH_SIZE - 1) / INDEX_EMBED_BATCH_SIZE;
+        let total_batches = total_misses.div_ceil(INDEX_EMBED_BATCH_SIZE);
 
         if let Some(ref progress) = options.progress {
             progress.on_start(total_batches);
@@ -343,10 +343,10 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         }
 
         // Close cache connection
-        if let Some(cc) = cache_conn {
-            if let Err(e) = cache::close_cache(cc) {
-                logger::warn(&format!("Failed to close embedding cache: {e}"));
-            }
+        if let Some(cc) = cache_conn
+            && let Err(e) = cache::close_cache(cc)
+        {
+            logger::warn(&format!("Failed to close embedding cache: {e}"));
         }
     } else if let Some(ref progress) = options.progress {
         // Clear the indexing spinner when there's nothing to embed
@@ -370,10 +370,10 @@ pub fn run_index(options: IndexOptions) -> Result<IndexResult, VibecheckError> {
         set_meta_value(&tx, "created_at", &chrono::Utc::now().to_rfc3339())?;
     }
     // Store the current HEAD commit hash so query/scan can detect staleness
-    if is_git_repo(&project_root) {
-        if let Ok(head) = get_head_commit(&project_root) {
-            set_meta_value(&tx, "head_commit", &head)?;
-        }
+    if is_git_repo(&project_root)
+        && let Ok(head) = get_head_commit(&project_root)
+    {
+        set_meta_value(&tx, "head_commit", &head)?;
     }
     tx.commit()?;
 

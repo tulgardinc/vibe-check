@@ -323,9 +323,9 @@ pub fn check_staleness(conn: &Connection, project_root: &Path) -> Option<String>
         None
     } else {
         Some(format!(
-            "Index may be stale: it was built at commit {}, but HEAD is now {}. Consider re-running `vibec index`.",
-            &stored[..8.min(stored.len())],
-            &current[..8.min(current.len())]
+            "Index was built at commit {} but HEAD is {}. Results may be incomplete. Run `vibec index` to update.",
+            stored,
+            current
         ))
     }
 }

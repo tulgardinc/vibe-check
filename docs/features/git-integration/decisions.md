@@ -76,3 +76,43 @@ Decisions and rationale recorded during development.
 ## D18: Fixed pre-existing borrow errors in cache.rs prune_cache
 **Decision**: Fixed two compilation errors in `prune_cache` (T9) where `Statement` borrows prevented moving `Connection`/`Transaction`. Added inner scopes to drop `Statement` before consuming the borrow.
 **Why**: These errors blocked compilation of the entire crate including T6 tests. The fix is trivially correct (scope-based drop) and does not change T9 behavior.
+
+---
+
+## Review Fixes (Iteration 1)
+
+### RF-1: Extracted shared `run_diff_query` to eliminate duplication (Important)
+**Issue**: `run_git_query` and `run_commit_query` were ~130 lines each with ~80% identical logic.
+**Fix**: Extracted a private `run_diff_query` function parameterized by:
+- `diff_entries: Vec<DiffEntry>` -- the list of changed files
+- `read_new: Fn(&str) -> Result<String>` -- how to read the "new" version of a file
+- `read_old: Fn(&DiffEntry, &str) -> Result<Option<String>>` -- how to read the "old" version of a file
+
+Both `run_git_query` and `run_commit_query` now prepare their diff entries and closures, then delegate to `run_diff_query`. The `read_old` closure receives the `DiffEntry` so it can check `entry.status == DiffStatus::Added` to return `None` for new files, unifying the Added-vs-Modified branching that was previously duplicated in both callers.
+**Files**: `src/core/git_pipeline.rs`
+
+### RF-2: Eliminated unnecessary heap allocations in HashSet lookup (Important)
+**Issue**: `all_removed.contains(&(c.path.clone(), c.name.clone()))` allocated two new `String`s per candidate checked.
+**Fix**: Build a `HashSet<(&str, &str)>` of borrowed references from `all_removed` before the filter loop, then use `.contains(&(c.path.as_str(), c.name.as_str()))` for zero-allocation lookups.
+**Files**: `src/core/git_pipeline.rs`
+
+### RF-3: Fixed clippy warnings (Minor)
+**Fixes applied**:
+- `index_pipeline.rs:295`: Replaced manual `(total_misses + INDEX_EMBED_BATCH_SIZE - 1) / INDEX_EMBED_BATCH_SIZE` with `total_misses.div_ceil(INDEX_EMBED_BATCH_SIZE)`.
+- `index_pipeline.rs:346-350`: Collapsed nested `if let Some(cc) = cache_conn { if let Err(e) = ...` into a single `if let` chain.
+- `index_pipeline.rs:373-377`: Collapsed nested `if is_git_repo(...) { if let Ok(head) = ...` into a single `if let` chain.
+**Note**: Remaining clippy warnings in `parser/chunker.rs` and `parser/typescript.rs` are pre-existing and outside the scope of this review.
+**Files**: `src/core/index_pipeline.rs`
+
+### RF-4: Staleness warning wording aligned to FR-22 spec (Important)
+**Issue**: The staleness warning said "Index may be stale: it was built at commit {short_hash}, but HEAD is now {short_hash}. Consider re-running `vibec index`." with truncated 8-char hashes.
+**Fix**: Changed to match the FR-22 specification exactly: "Index was built at commit <stored_hash> but HEAD is <current_hash>. Results may be incomplete. Run `vibec index` to update." Uses full commit hashes (not truncated).
+**Files**: `src/util/git.rs`
+
+### Deferred Issues (Tech Debt)
+- **Cache writes inside index DB transaction** (`index_pipeline.rs:314-329`): Cache `insert_embedding` calls happen within the DB transaction scope. If the transaction rolls back, the cache retains orphaned entries. Accepted as-is per D16 -- the cache is an accelerator and `prune` handles cleanup. A code comment could be added in a future pass.
+- **Redundant git repo check in `run_cache_prune_cmd`** (`main.rs:668-673`): Three separate `is_git_repo` checks occur in the prune flow. Not harmful, but could be simplified. Deferred as minor.
+- **`compare_chunks` silent duplicate handling** (`git_pipeline.rs:324-363`): When duplicate function names exist in the same file, only the last one is kept in the HashMap. Documented as intentional in D6. A debug-level log on collision could be added later.
+- **`diff_working_tree` in empty repo** (`git.rs:148-170`): `git diff HEAD` fails in repos with no commits. Edge case unlikely in practice. Deferred.
+- **No integration tests for git pipeline** (`tests/integration.rs`): Unit tests for `compare_chunks` are thorough but full git pipeline flow tests are missing. Deferred per architecture T5 note.
+- **Pre-existing clippy warnings** in `parser/chunker.rs` and `parser/typescript.rs`: Collapsible `if` chains. Not part of this feature; deferred.
